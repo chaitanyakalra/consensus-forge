@@ -1,0 +1,22 @@
+{
+    "name": "consensus-forge-openclaw",
+    "version": "1.0.0",
+    "description": "OpenClaw integration for ConsensusForge multi-LLM consensus system",
+    "main": "index.js",
+    "scripts": {
+        "start": "node index.js",
+        "test": "node test_council.js"
+    },
+    "keywords": [
+        "openclaw",
+        "llm",
+        "consensus",
+        "ai-agent"
+    ],
+    "author": "Chaitanya",
+    "license": "MIT",
+    "dependencies": {},
+    "engines": {
+        "node": ">=18.0.0"
+    }
+}

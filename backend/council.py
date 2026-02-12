@@ -1,6 +1,7 @@
 """3-stage LLM Council orchestration."""
 
 from typing import List, Dict, Any, Tuple
+import sys
 from .openrouter import query_models_parallel, query_model
 from .config import COUNCIL_MODELS, CHAIRMAN_MODEL
 
@@ -139,7 +140,14 @@ async def stage3_synthesize_final(
         for result in stage2_results
     ])
 
-    chairman_prompt = f"""You are the Chairman of an LLM Council. Multiple AI models have provided responses to a user's question, and then ranked each other's responses.
+    # Retry logic for chairman
+    # We try the main chairman model up to 3 times
+    # If it still fails, we try a backup model
+    BACKUP_CHAIRMAN = "google/gemini-2.0-flash-lite-preview-02-05:free"
+    
+    async def try_synthesize(model_name: str) -> Dict[str, Any]:
+        """Attempt synthesis with a specific model."""
+        chairman_prompt = f"""You are the Chairman of an LLM Council. Multiple AI models have provided responses to a user's question, and then ranked each other's responses.
 
 Original Question: {user_query}
 
@@ -153,24 +161,37 @@ Your task as Chairman is to synthesize all of this information into a single, co
 - The individual responses and their insights
 - The peer rankings and what they reveal about response quality
 - Any patterns of agreement or disagreement
+- You have to start your response with "FINAL ANSWER:" and then provide the answer.
 
 Provide a clear, well-reasoned final answer that represents the council's collective wisdom:"""
 
-    messages = [{"role": "user", "content": chairman_prompt}]
+        messages = [{"role": "user", "content": chairman_prompt}]
+        return await query_model(model_name, messages)
 
-    # Query the chairman model
-    response = await query_model(CHAIRMAN_MODEL, messages)
-
-    if response is None:
-        # Fallback if chairman fails
+    # Attempt 1-3: Main Chairman Model
+    for attempt in range(3):
+        print(f"  ... Chairman synthesis attempt {attempt + 1}/3 with {CHAIRMAN_MODEL}...", file=sys.stderr)
+        response = await try_synthesize(CHAIRMAN_MODEL)
+        if response:
+            return {
+                "model": CHAIRMAN_MODEL,
+                "response": response.get('content', '')
+            }
+            
+    # Fallback: Backup Model
+    print(f"  ! Chairman failed 3 times. Trying backup: {BACKUP_CHAIRMAN}...", file=sys.stderr)
+    response = await try_synthesize(BACKUP_CHAIRMAN)
+    
+    if response:
         return {
-            "model": CHAIRMAN_MODEL,
-            "response": "Error: Unable to generate final synthesis."
+            "model": BACKUP_CHAIRMAN,
+            "response": response.get('content', '')
         }
 
+    # Final fallback if even the backup fails
     return {
-        "model": CHAIRMAN_MODEL,
-        "response": response.get('content', '')
+        "model": "system-error",
+        "response": "Error: Council chairman and backup model both failed to synthesize a response."
     }
 
 

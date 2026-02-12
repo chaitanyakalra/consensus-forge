@@ -79,6 +79,24 @@ npm run dev
 
 Then open http://localhost:5173 in your browser.
 
+## 🏛️ OpenClaw Integration (Persistent AI Agent)
+
+Want a **24/7 autonomous AI agent** powered by the multi-LLM council? Check out the **OpenClaw integration**!
+
+The `openclaw-bridge/` directory contains everything you need to:
+- Run ConsensusForge as a persistent agent (not just a web app)
+- Connect via Telegram, Discord, or other channels
+- Maintain long-term memory and context
+- Automatically invoke the council for important decisions
+
+**Quick Start:**
+```bash
+cd openclaw-bridge
+cat README.md
+```
+
+See `openclaw-bridge/SETUP.md` for complete instructions.
+
 ## Tech Stack
 
 - **Backend:** FastAPI (Python 3.10+), async httpx, OpenRouter API
