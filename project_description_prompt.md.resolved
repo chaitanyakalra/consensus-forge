@@ -1,0 +1,36 @@
+# ConsensusForge: Project Overview & Capabilities
+
+## What is ConsensusForge?
+ConsensusForge is a multi-LLM "Council" system designed to provide high-accuracy, reliable answers by aggregating insights from multiple AI models. Instead of relying on a single model, it orchestrates a **3-stage consensus process** where models debate, rank, and synthesize a final answer.
+
+## Core Capabilities (Current State)
+1. **Parallel Multi-Model Execution**: Queries 5 different LLMs simultaneously (currently free tier models via OpenRouter).
+2. **3-Stage Consensus Pipeline**:
+   - **Stage 1 (Collection)**: Gathers initial answers from all council members.
+   - **Stage 2 await(Peer Review)**: Models blindly rank each other's answers based on quality.
+   - **Stage 3 (Synthesis)**: A "Chairman" model synthesizes the best parts of all answers into one final, superior response.
+3. **Robustness**:
+   - **Auto-Retry**: The Chairman automatically retries up to 3 times if it fails to synthesize.
+   - **Fallback Mechanism**: Automatically switches to a backup model (`Gemini Flash Lite`) if the primary Chairman fails.
+   - **Timeout Handling**: Slow models are cut off after 60s so they don't block the entire council.
+4. **OpenClaw Integration**: Acts as a "brain" for an OpenClaw agent, allowing users to invoke the council via chat commands like "analyze", "verify", or "council".
+
+## File Structure Overview
+
+### `backend/` (Python Core)
+The brain of the operation.
+- **[council.py](file:///c:/Users/Chaitanya.Kalra/github/consensus-forge/backend/council.py)**: The core logic. Defines the 3 stages (Collect, Rank, Synthesize) and the Chairman's retry loops.
+- **[openrouter.py](file:///c:/Users/Chaitanya.Kalra/github/consensus-forge/backend/openrouter.py)**: The API client. Handles parallel async calls to OpenRouter, manages connection pooling (`httpx`), and handles timeouts.
+- **[config.py](file:///c:/Users/Chaitanya.Kalra/github/consensus-forge/backend/config.py)**: Configuration file. Lists the specific models used for the Council and the Chairman.
+- **[main.py](file:///c:/Users/Chaitanya.Kalra/github/consensus-forge/main.py) / [cli.py](file:///c:/Users/Chaitanya.Kalra/github/consensus-forge/backend/cli.py)**: Entry points. [main.py](file:///c:/Users/Chaitanya.Kalra/github/consensus-forge/main.py) is a FastAPI server (for web apps), [cli.py](file:///c:/Users/Chaitanya.Kalra/github/consensus-forge/backend/cli.py) is for command-line usage (used by OpenClaw).
+
+### `openclaw-bridge/` (Node.js Interface)
+The bridge that connects the Python core to the outside world (OpenClaw).
+- **[index.js](file:///c:/Users/Chaitanya.Kalra/github/consensus-forge/openclaw-bridge/index.js)**: The main agent handler. Listens for user messages and decides when to call the council.
+- **[call_council.js](file:///c:/Users/Chaitanya.Kalra/github/consensus-forge/openclaw-bridge/call_council.js)**: Spawns the Python process (`backend.cli`), captures the JSON output, and handles errors.
+- **[test_council.js](file:///c:/Users/Chaitanya.Kalra/github/consensus-forge/openclaw-bridge/test_council.js)**: A standalone test script to verify the entire pipeline without needing full OpenClaw setup.
+
+## Current Performance
+- **Speed**: ~10–25s per query (depending on model speed).
+- **Cost**: Currently running on **Free Tier** models (OpenRouter Free, Gemini Free, etc.).
+- **Scalability**: Capable of switching to paid/faster models (GPT-4o, Claude 3.5 Sonnet) instantly by changing [config.py](file:///c:/Users/Chaitanya.Kalra/github/consensus-forge/backend/config.py).

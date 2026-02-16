@@ -1,0 +1,13 @@
+{
+    "name": "consensus-council-provider",
+    "version": "1.0.0",
+    "description": "OpenAI-compatible API server that wraps ConsensusForge council.py for OpenClaw integration",
+    "main": "server.js",
+    "scripts": {
+        "start": "node server.js"
+    },
+    "dependencies": {
+        "express": "^4.21.0",
+        "uuid": "^11.0.0"
+    }
+}
