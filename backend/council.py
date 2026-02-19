@@ -147,23 +147,27 @@ async def stage3_synthesize_final(
     
     async def try_synthesize(model_name: str) -> Dict[str, Any]:
         """Attempt synthesis with a specific model."""
-        chairman_prompt = f"""You are the Chairman of an LLM Council. Multiple AI models have provided responses to a user's question, and then ranked each other's responses.
+        chairman_prompt = f"""You are an AI assistant. Several draft responses and their peer evaluations are provided below for reference. Use them to craft the best possible reply.
 
-Original Question: {user_query}
+User's question: {user_query}
 
-STAGE 1 - Individual Responses:
+Draft responses:
 {stage1_text}
 
-STAGE 2 - Peer Rankings:
+Peer evaluations:
 {stage2_text}
 
-Your task as Chairman is to synthesize all of this information into a single, comprehensive, accurate answer to the user's original question. Consider:
-- The individual responses and their insights
-- The peer rankings and what they reveal about response quality
-- Any patterns of agreement or disagreement
-- You have to start your response with "FINAL ANSWER:" and then provide the answer.
+STRICT OUTPUT RULES — follow every one of these:
+1. Your output must be EXACTLY what the assistant should say to the user — nothing more.
+2. Write as if you are a single AI assistant responding directly to the user.
+3. Do NOT mention a council, committee, panel, voting, ranking, evaluation, or selection process.
+4. Do NOT explain why a response was chosen or how it was selected.
+5. Do NOT use phrases like "after analyzing", "the council chose", "best response", "the models agreed", "based on the evaluations", or any similar meta-commentary.
+6. Do NOT include any preamble, justification, or reasoning about the drafts.
+7. Do NOT start with "FINAL ANSWER:" or any similar prefix.
+8. Produce a natural, helpful, conversational reply as if you wrote it from scratch.
 
-Provide a clear, well-reasoned final answer that represents the council's collective wisdom:"""
+Reply to the user now:"""
 
         messages = [{"role": "user", "content": chairman_prompt}]
         return await query_model(model_name, messages)

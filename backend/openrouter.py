@@ -8,7 +8,7 @@ from typing import List, Dict, Any, Optional
 from .config import OPENROUTER_API_KEY, OPENROUTER_API_URL
 
 # Default per-model timeout (seconds) used in parallel queries
-MODEL_TIMEOUT = 60.0
+MODEL_TIMEOUT = 30.0
 
 
 async def query_model(

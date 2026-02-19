@@ -10,6 +10,9 @@
  * message routed through the bot is answered by the multi-model council.
  */
 
+const path = require('path');
+require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
+
 const express = require('express');
 const { v4: uuidv4 } = require('uuid');
 const { runCouncil, formatCouncilResponse } = require('../openclaw-bridge/call_council');
@@ -18,6 +21,15 @@ const app = express();
 app.use(express.json());
 
 const PORT = process.env.COUNCIL_PORT || 5001;
+
+// Debug: Log .env status at startup
+const apiKey = process.env.OPENROUTER_API_KEY;
+if (apiKey) {
+    const masked = apiKey.substring(0, 12) + '...' + apiKey.substring(apiKey.length - 4);
+    console.log(`🔑 .env loaded! API Key: ${masked} (length: ${apiKey.length})`);
+} else {
+    console.log('❌ WARNING: OPENROUTER_API_KEY not found in .env!');
+}
 
 /**
  * Extract plain text from OpenAI-format message content.
@@ -92,6 +104,11 @@ app.get('/health', (_req, res) => {
 app.post('/v1/chat/completions', async (req, res) => {
     const startTime = Date.now();
 
+    console.log(`\n${'='.repeat(60)}`);
+    console.log(`[${new Date().toISOString()}] 📥 INCOMING REQUEST`);
+    console.log(`  Model requested: ${req.body.model}`);
+    console.log(`  Messages count: ${req.body.messages?.length || 0}`);
+
     try {
         const { messages, model } = req.body;
 
@@ -123,8 +140,11 @@ app.post('/v1/chat/completions', async (req, res) => {
         // of parts: [{type: "text", text: "..."}, {type: "image_url", ...}].
         // OpenClaw sends the array format, so we must handle both.
         const query = extractTextContent(userMessage.content);
+        console.log(`  📝 Extracted text content type: ${typeof userMessage.content}`);
+        console.log(`  📝 Extracted query: "${String(query).substring(0, 120)}"`);
 
         if (!query) {
+            console.log(`  ❌ No extractable text content found!`);
             return res.status(400).json({
                 error: {
                     message: 'User message had no extractable text content',
@@ -133,18 +153,23 @@ app.post('/v1/chat/completions', async (req, res) => {
             });
         }
 
-        console.log(`[Council Provider] Received query: "${query.substring(0, 80)}..."`);
+        console.log(`[Council Provider] ⏳ Starting council pipeline...`);
 
         // Run the full council pipeline
         const result = await runCouncil(query);
+        const councilElapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+        console.log(`[Council Provider] ✅ Council returned after ${councilElapsed}s`);
+        console.log(`  success: ${result.success}`);
+        console.log(`  has stage1: ${!!result.stage1}, has stage2: ${!!result.stage2}, has stage3: ${!!result.stage3}`);
 
         if (!result.success) {
-            console.error('[Council Provider] Council failed:', result.error);
-            // Return a graceful error as a normal completion so OpenClaw doesn't crash
-            return res.json(formatAsCompletion(
+            console.error('[Council Provider] ❌ Council FAILED:', result.error);
+            const errorResponse = formatAsCompletion(
                 `I encountered an error while consulting the council: ${result.error}`,
                 startTime
-            ));
+            );
+            console.log(`  📤 Sending error response to OpenClaw`);
+            return res.json(errorResponse);
         }
 
         // Build the response content
@@ -157,19 +182,27 @@ app.post('/v1/chat/completions', async (req, res) => {
         }
 
         // Append the chairman's final synthesis
+        // Strip "FINAL ANSWER:" prefix so OpenClaw treats this as a plain chat reply
         if (result.stage3 && result.stage3.response) {
-            content += result.stage3.response;
+            content += result.stage3.response.replace(/^FINAL ANSWER:\s*/i, '').trim();
         } else {
             content += 'The council was unable to produce a synthesis. Individual model responses were collected but synthesis failed.';
         }
 
         const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-        console.log(`[Council Provider] Responded in ${elapsed}s`);
+        const completion = formatAsCompletion(content, startTime);
+        console.log(`[Council Provider] 📤 Sending response to OpenClaw (${elapsed}s)`);
+        console.log(`  Response content length: ${content.length} chars`);
+        console.log(`  Response preview: "${content.substring(0, 150)}..."`);
+        console.log(`  Completion ID: ${completion.id}`);
+        console.log(`${'='.repeat(60)}\n`);
 
-        res.json(formatAsCompletion(content, startTime));
+        res.json(completion);
 
     } catch (err) {
-        console.error('[Council Provider] Unexpected error:', err);
+        console.error(`[Council Provider] ❌ UNEXPECTED ERROR:`, err.message);
+        console.error(`  Stack:`, err.stack);
+        console.log(`${'='.repeat(60)}\n`);
         res.status(500).json({
             error: {
                 message: err.message || 'Internal server error',

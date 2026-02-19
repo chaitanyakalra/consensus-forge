@@ -1,0 +1,86 @@
+{
+    "meta": {
+        "lastTouchedVersion": "2026.2.9",
+        "lastTouchedAt": "2026-02-12T10:11:22.955Z"
+    },
+    "wizard": {
+        "lastRunAt": "2026-02-12T10:11:22.938Z",
+        "lastRunVersion": "2026.2.9",
+        "lastRunCommand": "doctor",
+        "lastRunMode": "local"
+    },
+    "auth": {
+        "profiles": {
+            "openrouter:default": {
+                "provider": "openrouter",
+                "mode": "api_key"
+            }
+        }
+    },
+    "agents": {
+        "defaults": {
+            "model": {
+                "primary": "openrouter/auto"
+            },
+            "models": {
+                "openrouter/auto": {
+                    "alias": "OpenRouter"
+                }
+            },
+            "workspace": "C:\\Users\\Chaitanya.Kalra\\.openclaw\\workspace",
+            "compaction": {
+                "mode": "safeguard"
+            },
+            "maxConcurrent": 4,
+            "subagents": {
+                "maxConcurrent": 8
+            }
+        }
+    },
+    "execution": {
+        "mode": "host",
+        "requireApproval": true
+    }
+
+  "messages": {
+        "ackReactionScope": "group-mentions"
+    },
+    "commands": {
+        "native": "auto",
+        "nativeSkills": "auto"
+    },
+    "channels": {
+        "telegram": {
+            "enabled": true,
+            "dmPolicy": "pairing",
+            "botToken": "8064455457:AAGq4QoEbmNMQ-LImr5OaDRkjwFKJpXnEIQ",
+            "groupPolicy": "allowlist",
+            "streamMode": "partial"
+        }
+    },
+    "gateway": {
+        "port": 18789,
+        "mode": "local",
+        "bind": "loopback",
+        "auth": {
+            "mode": "token",
+            "token": "a90e43135eaaefbb40d30aab786a4d45f4fff309b05874d2"
+        },
+        "tailscale": {
+            "mode": "off",
+            "resetOnExit": false
+        }
+    },
+    "skills": {
+        "install": {
+            "nodeManager": "npm"
+        }
+    },
+    "plugins": {
+        "entries": {
+            "telegram": {
+                "enabled": true
+            }
+        }
+    }
+}
