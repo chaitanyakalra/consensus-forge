@@ -15,12 +15,12 @@
 
 ## ✨ Features
 
-- 🧠 **Multi-LLM Council** — Queries are sent to **Gemini**, **Grok**, and optionally **GPT-4o-mini** simultaneously. Each model responds independently, reviews & ranks peers anonymously, and a **Chairman LLM** synthesizes the best final answer.
+- 🧠 **Multi-LLM Council** — Queries are sent to multiple LLMs simultaneously. Each model responds independently, reviews & ranks peers anonymously, and a **Chairman LLM** synthesizes the best final answer.
 - 🔄 **Automatic Evolution** — The system tracks which models perform best for which tasks and **automatically re-ranks the council** over time. Your agent literally gets smarter the longer it runs.
 - 🤖 **Persistent 24/7 Agents** — Powered by **OpenClaw**, agents maintain long-term memory, execute skills, and stay alive across reboots. Not just a chatbot — a _living_ assistant.
 - 💬 **Multi-Channel** — Connect via **Telegram**, Discord, WhatsApp, Web UI, or CLI. Talk to your council from anywhere.
-- 🎯 **Hallucination Reduction** — Multiple models cross-check each other. Anonymized peer review means no model plays favorites. The result? **Significantly fewer hallucinations** without fine-tuning or massive RAG pipelines.
-- 💸 **Zero / Minimal Cost** — Uses your existing API keys. Free-tier models via OpenRouter. Runs on your laptop or a ₹400/month VPS.
+- 🎯 **Hallucination Reduction** — Multiple models cross-check each other. Anonymized peer review means no model plays favorites. **Significantly fewer hallucinations** without fine-tuning or massive RAG pipelines.
+- 💸 **Zero / Minimal Cost** — Uses **free-tier models** via [OpenRouter](https://openrouter.ai/). Runs on your laptop or a cheap VPS.
 - 🔌 **Easy to Extend** — Add new models, skills, tools, and channels with minimal code.
 
 ---
@@ -32,7 +32,7 @@
 | Single LLMs hallucinate | **Multi-model consensus** cross-checks every answer |
 | Chatbots forget context | **Persistent agents** with long-term memory via OpenClaw |
 | AI quality degrades for niche tasks | **Automatic evolution** learns which models excel at what |
-| Running LLMs is expensive | **Free/minimal-cost** models + local execution |
+| Running LLMs is expensive | **Free-tier OpenRouter models** + local execution |
 | Hard to integrate into daily life | **Telegram-first** design — message your agent like a friend |
 
 ### 🎯 Target Use Cases
@@ -49,35 +49,27 @@
 
 ```
 [User Interfaces]
-   ↕ (Telegram / WhatsApp / Web / CLI)
-[ConsensusForge Gateway / Agent Runtime]
+   ↕ (Telegram / Web UI / CLI)
+[OpenClaw Agent Runtime]                  ← Persistent agents, skills, memory, channels
    ↕
-[Persistent Agent Layer]                  ← OpenClaw (state, skills, memory, channels)
+[Council Provider]                        ← Express server (port 5001), OpenAI-compatible API
    ↕
-[Decision Engine]                         ← Consensus Core (multi-LLM)
-   ├── LLM 1: Gemini
-   ├── LLM 2: Grok
-   └── (optional) LLM 3: OpenAI GPT-4o-mini
+[Decision Engine — backend/council.py]    ← 3-stage multi-LLM consensus
+   ├── Stage 1: All models respond independently
+   ├── Stage 2: Models anonymously rank each other
+   └── Stage 3: Chairman synthesizes final answer
    ↕
-[History & Evolution Module]
-   → SQLite → Analyze performance → Update council config (model ranking, weights)
+[OpenRouter API]                          ← Routes to free LLMs
+   ├── openrouter/free
+   ├── stepfun/step-3.5-flash:free
+   ├── tngtech/deepseek-r1t2-chimera:free
+   └── arcee-ai/trinity-large-preview:free
    ↕
-[Tools / Skills / External Integrations]
-   → Web search, file ops, APIs, calendars, etc.
+[Storage]
+   → JSON files in data/conversations/
 ```
 
 ![Architecture](assets/architecture.png)
-
-### 🧩 Core Components
-
-| Component | Technology | Role |
-|---|---|---|
-| **Runtime** | OpenClaw (Node.js) | Persistent agents, skills system, 24/7 execution |
-| **Consensus Core** | Custom Python (inspired by [karpathy/llm-council](https://github.com/karpathy/llm-council)) | Calls multiple LLMs, orchestrates review & synthesis |
-| **Model Providers** | Google Gemini API + xAI Grok API (+ optional OpenAI) | Diverse, high-quality LLM opinions |
-| **Evolution** | Rule-based / statistical re-ranking | Auto-improves council composition from history |
-| **Storage** | SQLite + JSON | Logs, agent memory, consensus history |
-| **Interfaces** | OpenClaw built-in channels | Telegram (recommended), Discord, Web |
 
 ### 🔄 The 3-Stage Council Process
 
@@ -91,8 +83,8 @@
 │    responses (no playing favorites)              │
 ├─────────────────────────────────────────────────┤
 │  Stage 3: Chairman Synthesis                    │
-│  → Designated Chairman compiles the best final  │
-│    answer from all responses + evaluations       │
+│  → Chairman compiles the best final answer from  │
+│    all responses + evaluations                   │
 └─────────────────────────────────────────────────┘
 ```
 
@@ -100,13 +92,14 @@
 
 ## 🚀 Quick Start (5 minutes)
 
-Get ConsensusForge running with the **web interface** in 5 minutes:
+Get ConsensusForge running with the **web interface** in 5 minutes.
 
 ### Prerequisites
 
 - **Node.js 18+** & npm
 - **Python 3.10+** & [uv](https://docs.astral.sh/uv/)
 - **Git**
+- **OpenRouter API key** — get one free at [openrouter.ai](https://openrouter.ai/)
 
 ### Steps
 
@@ -120,14 +113,16 @@ cd consensus-forge
 **2. Install dependencies**
 
 ```bash
-# Backend (Python)
+# Python backend
 uv sync
 
-# Frontend (React)
-cd frontend && npm install && cd ..
+# React frontend
+cd frontend
+npm install
+cd ..
 ```
 
-**3. Configure your API key**
+**3. Configure your OpenRouter API key**
 
 Create a `.env` file in the project root:
 
@@ -135,223 +130,257 @@ Create a `.env` file in the project root:
 OPENROUTER_API_KEY=sk-or-v1-your-key-here
 ```
 
-> 💡 Get your free API key at [openrouter.ai](https://openrouter.ai/)
+> 💡 Sign up at [openrouter.ai](https://openrouter.ai/) — free-tier models are available. No credit card required for the default council configuration.
 
 **4. Start the application**
 
 ```bash
-# Option A: One command
+# Option A: One command (Linux/macOS)
 ./start.sh
 
 # Option B: Run manually (two terminals)
-# Terminal 1 — Backend
+
+# Terminal 1 — Backend (FastAPI on port 8001)
 uv run python -m backend.main
 
-# Terminal 2 — Frontend
-cd frontend && npm run dev
+# Terminal 2 — Frontend (Vite on port 5173)
+cd frontend
+npm run dev
 ```
 
-**5. Open your browser**
+**5. Open in browser**
 
-Navigate to **http://localhost:5173** and ask your first question! 🎉
+Navigate to **http://localhost:5173** — ask your first question and watch the council deliberate! 🎉
 
 ---
 
 ## 📖 Full Build Guide
 
-For a deeper understanding or custom deployment, follow the **5-phase build guide** below.
+### Project Structure
 
-### Phase 1 — Environment Setup _(30–60 min)_
-
-```bash
-# 1. Install prerequisites
-#    Node.js 18+, Python 3.10+, Git
-
-# 2. Install OpenClaw globally
-npm install -g openclaw
-
-# 3. Onboard OpenClaw
-openclaw onboard
-#    → Choose "Custom Provider" (we override the LLM)
-#    → Select "Telegram" channel → create bot via @BotFather → paste token
-#    → Skip LLM provider for now
-
-# 4. Create project folder
-mkdir consensus-forge && cd consensus-forge
-
-# 5. (Optional) Clone llm-council for inspiration
-git clone https://github.com/karpathy/llm-council.git council-base
-cd council-base && pip install -r requirements.txt && cd ..
+```
+consensus-forge/
+├── backend/                  # Python — FastAPI + council logic
+│   ├── main.py               # FastAPI server (port 8001), SSE streaming
+│   ├── council.py             # 3-stage LLM council orchestration
+│   ├── openrouter.py          # Async httpx client for OpenRouter API
+│   ├── config.py              # Council model list & API config
+│   ├── cli.py                 # CLI wrapper (used by OpenClaw bridge)
+│   └── storage.py             # JSON-based conversation persistence
+├── frontend/                  # React + Vite web interface
+├── council_provider/          # Express server — OpenAI-compatible API for OpenClaw
+│   └── server.js              # Wraps council.py as /v1/chat/completions
+├── openclaw-bridge/           # Node.js ↔ Python bridge for OpenClaw
+│   ├── call_council.js        # Spawns Python process, parses JSON result
+│   ├── claw_adapter.js        # stdin/stdout adapter for OpenClaw command provider
+│   ├── index.js               # Agent handler with smart council invocation
+│   └── SETUP.md               # Detailed OpenClaw setup guide
+├── .env                       # API keys (gitignored)
+├── start.sh                   # One-command startup script
+└── pyproject.toml             # Python project config (uv)
 ```
 
-### Phase 2 — Build the Consensus Core _(Python – 2–4 hours)_
+### Configuring Council Models
 
-Create `council.py` — the heart of the multi-LLM decision engine:
+Edit `backend/config.py` to change which models sit on the council:
 
 ```python
-import os
-import json
-from google import genai                           # pip install google-generativeai
-from xai_sdk import Client as GrokClient           # pip install xai-sdk
-from openai import OpenAI                          # pip install openai
-
-# Load keys from .env or environment
-GEMINI_KEY = os.getenv("GEMINI_API_KEY")
-GROK_KEY   = os.getenv("GROK_API_KEY")
-OPENAI_KEY = os.getenv("OPENAI_API_KEY")
-
-genai.configure(api_key=GEMINI_KEY)
-grok_client = GrokClient(api_key=GROK_KEY)
-openai_client = OpenAI(api_key=OPENAI_KEY)
-
-DEFAULT_COUNCIL = [
-    {"name": "gemini", "model": "gemini-1.5-flash"},
-    {"name": "grok",   "model": "grok-beta"},
-    # {"name": "gpt",  "model": "gpt-4o-mini"}   # uncomment when wanted
+# Council members — all free via OpenRouter
+COUNCIL_MODELS = [
+    "openrouter/free",                          # Auto-routed free model
+    "stepfun/step-3.5-flash:free",
+    "tngtech/deepseek-r1t2-chimera:free",
+    "arcee-ai/trinity-large-preview:free",
 ]
 
-def call_llm(model_info, prompt):
-    name = model_info["name"]
-    if name == "gemini":
-        model = genai.GenerativeModel(model_info["model"])
-        resp = model.generate_content(prompt)
-        return resp.text
-    elif name == "grok":
-        chat = grok_client.chat.create(model=model_info["model"])
-        chat.append({"role": "user", "content": prompt})
-        resp = chat.complete()
-        return resp.content
-    elif name == "gpt":
-        resp = openai_client.chat.completions.create(
-            model=model_info["model"],
-            messages=[{"role": "user", "content": prompt}]
-        )
-        return resp.choices[0].message.content
-    return "Error: unknown model"
-
-def run_council(query, council=DEFAULT_COUNCIL, use_third=False):
-    responses = []
-    active = council if not use_third else council + [council[2]] if len(council) > 2 else council
-
-    for model in active:
-        try:
-            answer = call_llm(model, query)
-            responses.append({"model": model["name"], "answer": answer})
-        except Exception as e:
-            responses.append({"model": model["name"], "answer": f"Error: {str(e)}"})
-
-    # Synthesis: combine all responses for the chairman
-    combined = "\n\n".join([f"[{r['model']}]: {r['answer']}" for r in responses])
-    chairman_prompt = f"Review these answers and produce the best final response:\n\n{combined}"
-
-    # Use Gemini as chairman (cheap & fast)
-    final = call_llm({"name": "gemini", "model": "gemini-1.5-flash"}, chairman_prompt)
-
-    return {"query": query, "responses": responses, "final": final}
-
-# CLI testing
-if __name__ == "__main__":
-    result = run_council("What is the current status of Indian stock market?")
-    print(json.dumps(result, indent=2))
+# Chairman model — synthesizes the final response
+CHAIRMAN_MODEL = "openrouter/free"
 ```
 
-Install dependencies:
+> Browse all available models (including free ones) at [openrouter.ai/models](https://openrouter.ai/models).
+
+### Running the Web App
+
+The web app has two components that need to run simultaneously:
+
+| Component | Command | URL | What it does |
+|---|---|---|---|
+| **Backend** | `uv run python -m backend.main` | `http://localhost:8001` | FastAPI server with streaming SSE, runs the council |
+| **Frontend** | `cd frontend && npm run dev` | `http://localhost:5173` | React UI — ChatGPT-like interface with tab view |
+
+Or use `./start.sh` to start both at once.
+
+### Testing the Council via CLI
+
+You can run the council directly from the command line without the web UI:
 
 ```bash
-pip install google-generativeai xai-sdk openai python-dotenv
+uv run python -m backend.cli --query "What is the future of renewable energy?"
 ```
 
-Create your `.env`:
+This outputs full JSON with all 3 stages — useful for debugging and scripting.
+
+---
+
+## 🔗 OpenClaw Integration (Persistent 24/7 Agent)
+
+This is where ConsensusForge goes from a web app to a **persistent, always-on AI agent** you can talk to via Telegram.
+
+### How It Works
+
+```
+Telegram message → OpenClaw → council_provider (port 5001)
+                                    ↓
+                              call_council.js spawns:
+                              uv run python -m backend.cli --query "..."
+                                    ↓
+                              3-stage council runs
+                                    ↓
+                              JSON → formatted reply → Telegram
+```
+
+OpenClaw is configured to use `council/consensus` as its primary model, which points to the **council_provider** Express server on port 5001. This server exposes an OpenAI-compatible `/v1/chat/completions` endpoint that internally runs the full Python council pipeline.
+
+### Step 1: Install OpenClaw
 
 ```bash
-GEMINI_API_KEY=your-key-here
-GROK_API_KEY=your-key-here
-OPENAI_API_KEY=your-key-here   # optional
+npm install -g openclaw
 ```
 
-### Phase 3 — Integrate into OpenClaw _(Node.js – 2–4 hours)_
+### Step 2: Set Up Telegram Bot
 
-**Create the bridge script** `call_council.js`:
+1. Open Telegram, find **[@BotFather](https://t.me/botfather)**
+2. Send `/newbot` and follow the prompts
+3. Copy the **bot token** you receive
 
-```javascript
-const { exec } = require('child_process');
-const util = require('util');
-const execPromise = util.promisify(exec);
+### Step 3: Initialize OpenClaw
 
-async function runCouncil(query) {
-  try {
-    const cmd = `python3 council.py --query "${query.replace(/"/g, '\\"')}"`;
-    const { stdout } = await execPromise(cmd, { cwd: '/path/to/consensus-forge' });
-    return JSON.parse(stdout);
-  } catch (err) {
-    return { error: err.message };
+```bash
+openclaw onboard
+```
+
+When prompted:
+- **LLM Provider** → Choose **Custom Provider** (we override it with our council)
+- **Channel** → Choose **Telegram** → paste your bot token
+
+### Step 4: Configure OpenClaw for ConsensusForge
+
+Edit `~/.openclaw/openclaw.json` and add the council provider under `models.providers`:
+
+```json
+{
+  "models": {
+    "providers": {
+      "council": {
+        "baseUrl": "http://localhost:5001/v1",
+        "apiKey": "not-needed",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "consensus",
+            "name": "ConsensusForge Council",
+            "reasoning": false,
+            "input": ["text"],
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
+            "contextWindow": 200000,
+            "maxTokens": 8192
+          }
+        ]
+      }
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "council/consensus"
+      }
+    }
   }
 }
-
-module.exports = { runCouncil };
 ```
 
-**Create the OpenClaw skill** at `~/.openclaw/skills/consensus.md`:
+This tells OpenClaw to route all messages through your local council provider.
 
-```markdown
-# ConsensusForge Skill
-
-Description: Run multi-LLM consensus for important decisions
-Trigger: when asked to analyze, decide, summarize uncertain info,
-         or command contains "council" / "verify"
-
-Steps:
-1. Extract the decision/query from user message
-2. Call Python council script: python3 /path/to/consensus-forge/council.py --query "{query}"
-3. Parse JSON output
-4. Return final consensus + brief explanation of votes
-```
-
-**Modify OpenClaw agent logic** (custom `SOUL.md` or middleware) to use the consensus skill for analysis tasks.
-
-### Phase 4 — Add Evolution _(1–2 hours)_
-
-Create `evolve.py` — runs periodically via cron or OpenClaw scheduler:
-
-```python
-# Simple version: count how often each model was closest to final answer
-# Later: add user thumbs-up/down feedback from Telegram
-```
-
-The evolution module analyzes consensus history in SQLite and **automatically re-ranks models** based on performance patterns.
-
-### Phase 5 — Testing & Deployment
+### Step 5: Install Council Provider Dependencies
 
 ```bash
-# Test via Telegram
-"Use council to analyze Nifty 50 trend"
-
-# Deploy options
-# Option A: Run on VPS (DigitalOcean ₹400/month)
-# Option B: Run on home PC with PM2
-pm2 start start.sh --name consensus-forge
-
-# Option C: Docker (recommended for sandboxing)
-docker-compose up -d
+cd council_provider
+npm install
+cd ..
 ```
 
-> ⚠️ **Security**: Sandbox your agents! Docker is strongly recommended for production.
+### Step 6: Create Agent Personality (Optional)
+
+Create or edit `~/.openclaw/workspace/SOUL.md`:
+
+```markdown
+# SOUL.md – Who You Are
+
+## How You Think (ConsensusForge Council)
+Your responses are powered by a council of multiple AI models working together:
+1. Multiple models independently answer the question (Stage 1)
+2. Models blindly rank each other's answers (Stage 2)
+3. A chairman synthesizes the best final answer (Stage 3)
+
+This makes you more accurate and reliable than any single model.
+```
+
+### Step 7: Run Everything
+
+You need **three things running** for the full OpenClaw + Telegram setup:
+
+```bash
+# Terminal 1 — Council Provider (port 5001)
+cd council_provider
+node server.js
+
+# Terminal 2 — OpenClaw (connects to Telegram)
+openclaw start
+```
+
+Or for 24/7 production operation:
+
+```bash
+npm install -g pm2
+pm2 start council_provider/server.js --name "council-provider"
+pm2 start openclaw --name "consensus-forge"
+pm2 save
+```
+
+### Step 8: Test via Telegram
+
+1. Open Telegram and find your bot
+2. Send: `/start`
+3. Try: **"Analyze the future of AI in healthcare"**
+4. Watch the council deliberate and respond! 🏛️
+
+> ⏱️ **Expected time**: 15–30 seconds per response (3 stages × multiple models).
+
+### Troubleshooting
+
+| Problem | Solution |
+|---|---|
+| `ModuleNotFoundError: No module named 'backend'` | Run from the project root: `uv sync` |
+| Council provider won't start | Check `.env` has `OPENROUTER_API_KEY`, run `cd council_provider && npm install` |
+| OpenClaw can't find model | Verify `openclaw.json` has `council/consensus` as primary model |
+| Council is slow | Reduce number of models in `backend/config.py` |
+| 429 rate limit errors | Free models have rate limits — wait 1–2 min and retry |
 
 ---
 
 ## 🛠 Technology Stack
 
-| Layer | Technology | Cost | Why Chosen |
+| Layer | Technology | Cost | Role |
 |---|---|---|---|
-| **Agent Runtime** | OpenClaw (npm package) | Free | Persistent agents, skills, channels |
-| **Language** | Node.js (main) + Python (council) | Free | OpenClaw is Node, council easier in Python |
-| **LLMs** | Gemini API + Grok API (+ optional OpenAI) | Your existing keys | Fast, strong, diverse opinions |
-| **Consensus Logic** | Custom + inspired by [llm-council](https://github.com/karpathy/llm-council) | Free | Multi-LLM review & synthesis |
-| **Database** | SQLite | Free | Lightweight, local |
-| **Communication** | Telegram Bot (via OpenClaw) | Free | Easiest persistent interface |
-| **Backend** | FastAPI (Python 3.10+), async httpx | Free | High-performance async API |
-| **Frontend** | React + Vite, react-markdown | Free | Fast dev server, rich rendering |
-| **Optional Extras** | Docker (sandbox), PM2 (process mgmt) | Free | Security & reliability |
+| **Agent Runtime** | [OpenClaw](https://docs.openclaw.io) | Free | Persistent agents, skills, channels, 24/7 execution |
+| **Backend** | FastAPI + async httpx | Free | API server, SSE streaming, async LLM calls |
+| **Frontend** | React 19 + Vite 7 | Free | ChatGPT-like web UI with model tab view |
+| **LLM Routing** | [OpenRouter](https://openrouter.ai/) | Free tier | Unified API to dozens of LLMs |
+| **Council Provider** | Express.js | Free | OpenAI-compatible wrapper for OpenClaw |
+| **Consensus Logic** | Custom Python (inspired by [karpathy/llm-council](https://github.com/karpathy/llm-council)) | Free | 3-stage multi-LLM review & synthesis |
+| **Storage** | JSON files | Free | Conversation persistence in `data/conversations/` |
+| **Communication** | Telegram Bot (via OpenClaw) | Free | Primary persistent chat interface |
+| **Package Management** | uv (Python) + npm (Node.js) | Free | Fast, reliable dependency management |
 
 ---
 
@@ -361,7 +390,7 @@ docker-compose up -d
 
 | Screenshot | Description |
 |---|---|
-| ![Web UI](assets/web-ui.png) | **Council Web Interface** — ChatGPT-like UI showing the multi-LLM tab view with individual model responses and the synthesized final answer |
+| ![Web UI](assets/web-ui.png) | **Council Web Interface** — ChatGPT-like UI with tab view showing individual model responses and the synthesized final answer |
 | ![Peer Review](assets/peer-review.png) | **Peer Review Stage** — Anonymized peer rankings where each model evaluates the others' responses with aggregate scoring |
 | ![Telegram Bot](assets/telegram-bot.png) | **Telegram Integration** — The 24/7 persistent agent responding to queries via Telegram with council-powered answers |
 
@@ -369,15 +398,17 @@ docker-compose up -d
 
 ## 🗺️ Roadmap
 
-- [x] Multi-LLM Consensus Core (Gemini + Grok council)
-- [x] 3-Stage Pipeline (Respond → Review → Synthesize)
+- [x] Multi-LLM Consensus Core (3-stage pipeline)
 - [x] Web Interface (React + Vite)
-- [x] OpenClaw Integration for persistent agents
+- [x] OpenRouter integration with free-tier models
+- [x] OpenClaw integration for persistent agents
+- [x] Council Provider (OpenAI-compatible API)
 - [x] Telegram channel support
+- [x] CLI interface for scripting
+- [x] Conversation persistence (JSON storage)
 - [ ] 👍 User feedback loop (thumbs up/down in Telegram)
 - [ ] 🧮 Advanced synthesis (LLM ranker + weighted voting)
 - [ ] 🔀 Auto-switch council based on task type
-- [ ] 🌐 Publish to GitHub with CI/CD
 - [ ] 🏠 Add local models ([Ollama](https://ollama.ai/)) as free fallback
 - [ ] 📊 Dashboard for council performance analytics
 - [ ] 🔐 Docker-based sandboxed execution
@@ -418,18 +449,16 @@ Copyright (c) 2026 Chaitanya
 
 ## ❤️ Acknowledgments
 
-- **[Andrej Karpathy](https://github.com/karpathy)** — for the original [llm-council](https://github.com/karpathy/llm-council) concept and inspiration. ConsensusForge's multi-LLM review & synthesis pipeline is built on this brilliant idea.
-- **[OpenClaw](https://openclaw.com/)** — the powerful runtime that makes persistent, 24/7 AI agents possible with built-in skills, memory, and channel support.
-- **[Google Gemini](https://ai.google.dev/)** — fast, capable, and cost-effective. Our default Chairman LLM.
-- **[xAI Grok](https://x.ai/)** — bold, unfiltered perspectives that strengthen council debate.
-- **[OpenRouter](https://openrouter.ai/)** — unified API access to dozens of LLMs with free-tier models.
-- **[Vite](https://vitejs.dev/)** + **[React](https://react.dev/)** — blazing-fast frontend tooling.
-- **[FastAPI](https://fastapi.tiangolo.com/)** — high-performance async Python backend.
+- **[Andrej Karpathy](https://github.com/karpathy)** — for the original [llm-council](https://github.com/karpathy/llm-council) concept and inspiration
+- **[OpenClaw](https://docs.openclaw.io)** — the powerful runtime that makes persistent, 24/7 AI agents possible
+- **[OpenRouter](https://openrouter.ai/)** — unified API access to dozens of LLMs with free-tier models
+- **[Vite](https://vitejs.dev/)** + **[React](https://react.dev/)** — blazing-fast frontend tooling
+- **[FastAPI](https://fastapi.tiangolo.com/)** — high-performance async Python backend
 
 ---
 
 <p align="center">
-  <strong>Start small → Get Gemini + Grok working → Add evolution → Polish interface</strong>
+  <strong>Start small → Get the web UI running → Connect OpenClaw → Add Telegram → Evolve</strong>
   <br><br>
   Made with ❤️ in Gurugram, India
 </p>
