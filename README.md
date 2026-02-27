@@ -69,7 +69,7 @@
    → JSON files in data/conversations/
 ```
 
-![User Flow](assets/userFlow.svg)
+![User Flow](assets/userFlow.png)
 
 ### 🔄 The 3-Stage Council Process
 
@@ -460,5 +460,5 @@ Copyright (c) 2026 Chaitanya
 <p align="center">
   <strong>Start small → Get the web UI running → Connect OpenClaw → Add Telegram → Evolve</strong>
   <br><br>
-  Made with ❤️ with AI and lot of coffee.
+  Made with ❤️ and lot of coffee.
 </p>
