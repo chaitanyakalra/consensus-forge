@@ -45,6 +45,60 @@
 
 ---
 
+## 🏢 The "Self-Running Company" Paradigm
+
+ConsensusForge isn't just a chatbot — it's a **miniature digital corporation** where each LLM is an employee and **you are the CEO**.
+
+Think about it: if you were running a company and needed a high-stakes financial analysis or a critical script executed on your production server, you would **never** hand that to a single junior employee and blindly trust whatever they produce. You would:
+
+1. 📝 **Ask the team to produce drafts** → _Stage 1: Multiple models respond independently_
+2. 🔍 **Have the team review each other's work** to catch errors, security flaws, or bad reasoning → _Stage 2: Anonymized peer review_
+3. 👔 **Have a senior director synthesize** the best parts into a final executive summary → _Stage 3: Chairman synthesis_
+
+That's exactly what ConsensusForge automates — a **corporate decision-making pipeline** running in seconds instead of days.
+
+### 🔐 Why This Matters for Sensitive Tasks
+
+When you connect an AI agent to your **terminal**, **file system**, or **financial data** via OpenClaw, trusting a single LLM is dangerous:
+
+- A single model could hallucinate a destructive command
+- A single model could write buggy code that corrupts your data
+- A single model could give confidently wrong financial advice
+
+With ConsensusForge, if Model A writes a risky command, **Models B and C will flag it** during peer review, and the Chairman will reject it in synthesis. You get an **automated safety net** that doesn't exist in single-LLM agent architectures.
+
+### ⚡ Speed vs. Trust: A Worthy Trade-off
+
+| | Single LLM | ConsensusForge |
+|---|---|---|
+| **Response time** | 1–2 seconds | 15–30 seconds (free models) |
+| **Hallucination risk** | High | Significantly reduced |
+| **Self-verification** | None | Built-in peer review |
+| **Safe for agentic tasks** | ⚠️ Risky | ✅ Cross-checked |
+
+> **Current state**: Free-tier OpenRouter models are slower due to rate limits and deprioritization. Switching to **paid models** (GPT-4o-mini, Claude 3.5 Haiku, Gemini 1.5 Flash) could drop response times to **5–8 seconds** while dramatically improving reasoning quality.
+
+### 🧭 Solving the Latency Problem: Intent-Based Routing
+
+Not every question needs a full council debate. Asking "What's the weather?" doesn't require 4 models peer-reviewing each other — but "Should I sell my NIFTY 50 holdings?" absolutely does.
+
+The solution: **detect the intent of the query first**, then route accordingly:
+
+| Query Intent | Route | Speed |
+|---|---|---|
+| Simple / casual ("Hi", "Thanks", "What time is it?") | ⚡ Single fast model | ~1–2s |
+| Moderate ("Summarize this article") | ⚡ Single model | ~2–3s |
+| High-stakes ("Analyze my portfolio", "Write a bash script to reorganize my files") | 🏛️ **Full council** | ~15–30s |
+| Sensitive / dangerous ("Delete old backups", "Execute this on my terminal") | 🏛️ **Full council + safety review** | ~15–30s |
+
+This is already partially built into ConsensusForge — the `shouldInvokeCouncil()` function in `openclaw-bridge/index.js` checks for trigger keywords like _"analyze"_, _"verify"_, _"decide"_, _"council"_, and _"should I"_. Simple messages get a fast direct response; complex ones activate the full 3-stage pipeline.
+
+**Future improvements** could include using a lightweight classifier model to detect intent automatically, so you never have to think about it — the system just _knows_ when to bring the council together.
+
+The 15-second wait is the digital equivalent of **"measure twice, cut once"** — you're trading instant gratification for verifiable safety.
+
+---
+
 ## 📊 Architecture
 
 ```
