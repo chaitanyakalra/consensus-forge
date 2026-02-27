@@ -9,7 +9,7 @@
 
 > 🏛️ **An open-source framework that combines persistent, autonomous AI agents with an evolving multi-LLM consensus mechanism — reducing hallucinations, improving reliability, and getting smarter the longer it runs.**
 
-![ConsensusForge](header.jpg)
+![ConsensusForge](assets/ConsensusForge.png)
 
 ---
 
@@ -69,7 +69,7 @@
    → JSON files in data/conversations/
 ```
 
-![Architecture](assets/architecture.png)
+![User Flow](assets/userFlow.svg)
 
 ### 🔄 The 3-Stage Council Process
 
@@ -460,5 +460,5 @@ Copyright (c) 2026 Chaitanya
 <p align="center">
   <strong>Start small → Get the web UI running → Connect OpenClaw → Add Telegram → Evolve</strong>
   <br><br>
-  Made with ❤️ in Gurugram, India
+  Made with ❤️ with AI and lot of coffee.
 </p>
