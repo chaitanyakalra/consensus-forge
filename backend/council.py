@@ -113,6 +113,33 @@ Now provide your evaluation and ranking:"""
     return stage2_results, label_to_model
 
 
+def _is_meta_commentary(text: str) -> bool:
+    """Check if the chairman response is meta-commentary about drafts instead of a real reply."""
+    if not text or len(text.strip()) < 5:
+        return True
+    lower = text.lower().strip()
+    # Reject responses that reference draft labels or evaluation language
+    meta_patterns = [
+        "response a", "response b", "response c", "response d",
+        "draft 1", "draft 2", "draft 3", "draft 4",
+        "offers a clearer approach",
+        "aligning perfectly with",
+        "the best response",
+        "the chosen response",
+        "i would select",
+        "i choose",
+        "i recommend response",
+        "based on the evaluation",
+        "based on the ranking",
+        "peer evaluation",
+        "the ranking shows",
+    ]
+    for pattern in meta_patterns:
+        if pattern in lower:
+            return True
+    return False
+
+
 async def stage3_synthesize_final(
     user_query: str,
     stage1_results: List[Dict[str, Any]],
@@ -129,45 +156,45 @@ async def stage3_synthesize_final(
     Returns:
         Dict with 'model' and 'response' keys
     """
-    # Build comprehensive context for chairman
+    # Anonymize drafts — use numbered labels, hide model names
     stage1_text = "\n\n".join([
-        f"Model: {result['model']}\nResponse: {result['response']}"
-        for result in stage1_results
+        f"--- Draft {i+1} ---\n{result['response']}"
+        for i, result in enumerate(stage1_results)
     ])
 
-    stage2_text = "\n\n".join([
-        f"Model: {result['model']}\nRanking: {result['ranking']}"
-        for result in stage2_results
-    ])
+    # Simplify peer evaluations — just show the consensus ranking order
+    ranking_summary_parts = []
+    for result in stage2_results:
+        parsed = result.get("parsed_ranking", [])
+        if parsed:
+            ranking_summary_parts.append(", ".join(parsed))
+    ranking_summary = "\n".join(ranking_summary_parts) if ranking_summary_parts else "No clear ranking consensus."
 
     # Retry logic for chairman
-    # We try the main chairman model up to 3 times
-    # If it still fails, we try a backup model
     BACKUP_CHAIRMAN = "google/gemini-2.0-flash-lite-preview-02-05:free"
     
     async def try_synthesize(model_name: str) -> Dict[str, Any]:
         """Attempt synthesis with a specific model."""
-        chairman_prompt = f"""You are an AI assistant. Several draft responses and their peer evaluations are provided below for reference. Use them to craft the best possible reply.
+        chairman_prompt = f"""Below are several draft replies that were written for the user's question. Read them, pick the strongest ideas, and write your own final reply.
 
-User's question: {user_query}
+USER'S QUESTION:
+{user_query}
 
-Draft responses:
+DRAFTS (for reference only — do not mention these):
 {stage1_text}
 
-Peer evaluations:
-{stage2_text}
+────────────────────────
+ABSOLUTE RULES — violating ANY of these makes your answer invalid:
+• Output ONLY the final message the user should see — nothing else.
+• Write as a single AI assistant talking directly to the user.
+• NEVER reference "Draft 1/2/3", "Response A/B/C", rankings, evaluations, or a selection process.
+• NEVER say things like "offers a clearer approach", "aligning perfectly", "the best response is", or any similar meta-commentary about the drafts.
+• NEVER add a preamble, explanation, or justification.
+• If the user asked for code, provide the actual code — not a description of which draft had better code.
+• Start your reply as if you are answering the user from scratch.
+────────────────────────
 
-STRICT OUTPUT RULES — follow every one of these:
-1. Your output must be EXACTLY what the assistant should say to the user — nothing more.
-2. Write as if you are a single AI assistant responding directly to the user.
-3. Do NOT mention a council, committee, panel, voting, ranking, evaluation, or selection process.
-4. Do NOT explain why a response was chosen or how it was selected.
-5. Do NOT use phrases like "after analyzing", "the council chose", "best response", "the models agreed", "based on the evaluations", or any similar meta-commentary.
-6. Do NOT include any preamble, justification, or reasoning about the drafts.
-7. Do NOT start with "FINAL ANSWER:" or any similar prefix.
-8. Produce a natural, helpful, conversational reply as if you wrote it from scratch.
-
-Reply to the user now:"""
+Your reply to the user:"""
 
         messages = [{"role": "user", "content": chairman_prompt}]
         return await query_model(model_name, messages)
@@ -177,22 +204,52 @@ Reply to the user now:"""
         print(f"  ... Chairman synthesis attempt {attempt + 1}/3 with {CHAIRMAN_MODEL}...", file=sys.stderr)
         response = await try_synthesize(CHAIRMAN_MODEL)
         if response:
+            content = response.get('content', '')
+            if _is_meta_commentary(content):
+                print(f"  ⚠️ Attempt {attempt + 1} returned meta-commentary, retrying...", file=sys.stderr)
+                print(f"     Preview: \"{content[:80]}...\"", file=sys.stderr)
+                continue
             return {
                 "model": CHAIRMAN_MODEL,
-                "response": response.get('content', '')
+                "response": content
             }
             
     # Fallback: Backup Model
-    print(f"  ! Chairman failed 3 times. Trying backup: {BACKUP_CHAIRMAN}...", file=sys.stderr)
+    print(f"  ! Chairman failed/meta 3 times. Trying backup: {BACKUP_CHAIRMAN}...", file=sys.stderr)
     response = await try_synthesize(BACKUP_CHAIRMAN)
     
     if response:
+        content = response.get('content', '')
+        if not _is_meta_commentary(content):
+            return {
+                "model": BACKUP_CHAIRMAN,
+                "response": content
+            }
+
+    # Ultimate fallback: return the top-ranked Stage 1 response directly
+    # This is better than returning meta-commentary
+    print(f"  ! All synthesis attempts failed or returned meta-commentary.", file=sys.stderr)
+    print(f"  ! Falling back to top-ranked Stage 1 response.", file=sys.stderr)
+    if stage1_results:
+        # Try to find the top-ranked response from stage2 parsed rankings
+        for result in stage2_results:
+            parsed = result.get("parsed_ranking", [])
+            if parsed:
+                top_label = parsed[0]  # e.g., "Response A"
+                # Extract the letter index (A=0, B=1, etc.)
+                letter = top_label.replace("Response ", "").strip().upper()
+                idx = ord(letter) - ord('A') if len(letter) == 1 else 0
+                if 0 <= idx < len(stage1_results):
+                    return {
+                        "model": stage1_results[idx]["model"] + " (direct-fallback)",
+                        "response": stage1_results[idx]["response"]
+                    }
+        # If no ranking info, just use first response
         return {
-            "model": BACKUP_CHAIRMAN,
-            "response": response.get('content', '')
+            "model": stage1_results[0]["model"] + " (direct-fallback)",
+            "response": stage1_results[0]["response"]
         }
 
-    # Final fallback if even the backup fails
     return {
         "model": "system-error",
         "response": "Error: Council chairman and backup model both failed to synthesize a response."

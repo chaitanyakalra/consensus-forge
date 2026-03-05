@@ -108,6 +108,7 @@ app.post('/v1/chat/completions', async (req, res) => {
     console.log(`[${new Date().toISOString()}] 📥 INCOMING REQUEST`);
     console.log(`  Model requested: ${req.body.model}`);
     console.log(`  Messages count: ${req.body.messages?.length || 0}`);
+    console.log(`  Stream requested: ${!!req.body.stream}`);
 
     try {
         const { messages, model } = req.body;
@@ -190,14 +191,59 @@ app.post('/v1/chat/completions', async (req, res) => {
         }
 
         const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-        const completion = formatAsCompletion(content, startTime);
         console.log(`[Council Provider] 📤 Sending response to OpenClaw (${elapsed}s)`);
         console.log(`  Response content length: ${content.length} chars`);
         console.log(`  Response preview: "${content.substring(0, 150)}..."`);
-        console.log(`  Completion ID: ${completion.id}`);
-        console.log(`${'='.repeat(60)}\n`);
 
-        res.json(completion);
+        // OpenClaw sends stream: true and expects SSE format
+        if (req.body.stream) {
+            console.log(`  📡 Streaming response via SSE`);
+            res.setHeader('Content-Type', 'text/event-stream');
+            res.setHeader('Cache-Control', 'no-cache');
+            res.setHeader('Connection', 'keep-alive');
+
+            const chunkId = `chatcmpl-${uuidv4()}`;
+            const created = Math.floor(startTime / 1000);
+
+            // Send the content as a single chunk
+            const chunk = {
+                id: chunkId,
+                object: 'chat.completion.chunk',
+                created: created,
+                model: 'council/consensus',
+                choices: [{
+                    index: 0,
+                    delta: { role: 'assistant', content: content },
+                    finish_reason: null
+                }]
+            };
+            res.write(`data: ${JSON.stringify(chunk)}\n\n`);
+
+            // Send the stop chunk
+            const stopChunk = {
+                id: chunkId,
+                object: 'chat.completion.chunk',
+                created: created,
+                model: 'council/consensus',
+                choices: [{
+                    index: 0,
+                    delta: {},
+                    finish_reason: 'stop'
+                }]
+            };
+            res.write(`data: ${JSON.stringify(stopChunk)}\n\n`);
+
+            // Send the [DONE] signal
+            res.write('data: [DONE]\n\n');
+            console.log(`  Completion ID: ${chunkId}`);
+            console.log(`${'='.repeat(60)}\n`);
+            res.end();
+        } else {
+            const completion = formatAsCompletion(content, startTime);
+            console.log(`  Completion ID: ${completion.id}`);
+            console.log(`${'='.repeat(60)}\n`);
+            res.json(completion);
+        }
 
     } catch (err) {
         console.error(`[Council Provider] ❌ UNEXPECTED ERROR:`, err.message);
