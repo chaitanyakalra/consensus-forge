@@ -7,7 +7,7 @@ import httpx
 from typing import List, Dict, Any, Optional
 from .config import OPENROUTER_API_KEY, OPENROUTER_API_URL
 
-# Default per-model timeout (seconds) used in parallel queries
+# Default per-model timeout (seconds) — 30s is needed for larger free models under load
 MODEL_TIMEOUT = 30.0
 
 
@@ -103,7 +103,7 @@ async def query_models_parallel(
             return None
 
     # Use a single shared client for all parallel requests
-    async with httpx.AsyncClient(timeout=MODEL_TIMEOUT) as client:
+    async with httpx.AsyncClient(timeout=httpx.Timeout(MODEL_TIMEOUT + 5)) as client:
         tasks = [_query_with_timeout(m, client) for m in models]
         responses = await asyncio.gather(*tasks)
 

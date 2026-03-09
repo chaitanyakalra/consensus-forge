@@ -2,8 +2,12 @@
 
 from typing import List, Dict, Any, Tuple
 import sys
+import asyncio
 from .openrouter import query_models_parallel, query_model
 from .config import COUNCIL_MODELS, CHAIRMAN_MODEL
+
+# Per-chairman-attempt timeout — prevents one slow model from blocking 6+ minutes
+CHAIRMAN_TIMEOUT = 30.0
 
 
 async def stage1_collect_responses(user_query: str) -> List[Dict[str, Any]]:
@@ -171,11 +175,21 @@ async def stage3_synthesize_final(
     ranking_summary = "\n".join(ranking_summary_parts) if ranking_summary_parts else "No clear ranking consensus."
 
     # Retry logic for chairman
-    BACKUP_CHAIRMAN = "google/gemini-2.0-flash-lite-preview-02-05:free"
-    
+    BACKUP_CHAIRMAN = "google/gemma-3n-e4b-it:free"  # tested, ~1s
+
     async def try_synthesize(model_name: str) -> Dict[str, Any]:
-        """Attempt synthesis with a specific model."""
-        chairman_prompt = f"""Below are several draft replies that were written for the user's question. Read them, pick the strongest ideas, and write your own final reply.
+        """Attempt synthesis with a specific model, with a hard timeout."""
+        try:
+            result = await asyncio.wait_for(
+                query_model(model_name, [{"role": "user", "content": chairman_prompt}]),
+                timeout=CHAIRMAN_TIMEOUT
+            )
+            return result
+        except asyncio.TimeoutError:
+            print(f"  [TIMEOUT] Chairman {model_name} timed out after {CHAIRMAN_TIMEOUT}s", file=sys.stderr)
+            return None
+
+    chairman_prompt = f"""Below are several draft replies that were written for the user's question. Read them, pick the strongest ideas, and write your own final reply.
 
 USER'S QUESTION:
 {user_query}
@@ -196,9 +210,6 @@ ABSOLUTE RULES — violating ANY of these makes your answer invalid:
 
 Your reply to the user:"""
 
-        messages = [{"role": "user", "content": chairman_prompt}]
-        return await query_model(model_name, messages)
-
     # Attempt 1-3: Main Chairman Model
     for attempt in range(3):
         print(f"  ... Chairman synthesis attempt {attempt + 1}/3 with {CHAIRMAN_MODEL}...", file=sys.stderr)
@@ -207,13 +218,9 @@ Your reply to the user:"""
             content = response.get('content', '')
             if _is_meta_commentary(content):
                 print(f"  ⚠️ Attempt {attempt + 1} returned meta-commentary, retrying...", file=sys.stderr)
-                print(f"     Preview: \"{content[:80]}...\"", file=sys.stderr)
                 continue
-            return {
-                "model": CHAIRMAN_MODEL,
-                "response": content
-            }
-            
+            return {"model": CHAIRMAN_MODEL, "response": content}
+
     # Fallback: Backup Model
     print(f"  ! Chairman failed/meta 3 times. Trying backup: {BACKUP_CHAIRMAN}...", file=sys.stderr)
     response = await try_synthesize(BACKUP_CHAIRMAN)
@@ -357,7 +364,7 @@ Title:"""
     messages = [{"role": "user", "content": title_prompt}]
 
     # Use a free model for title generation
-    response = await query_model("openrouter/free", messages, timeout=30.0)
+    response = await query_model(CHAIRMAN_MODEL, messages, timeout=30.0)
 
     if response is None:
         # Fallback to a generic title
