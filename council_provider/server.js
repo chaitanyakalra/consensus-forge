@@ -37,6 +37,12 @@ if (apiKey) {
     console.log('❌ WARNING: OPENROUTER_API_KEY not found in .env!');
 }
 
+// Gemini key (used for intent classification + Gemini execution/summaries)
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
+if (!GEMINI_API_KEY) {
+    console.log('⚠️  WARNING: GEMINI_API_KEY not found in .env. OpenClaw must pass a valid Gemini key via Authorization header.');
+}
+
 /**
  * Extract plain text from OpenAI-format message content.
  * Content can be either:
@@ -54,6 +60,23 @@ function extractTextContent(content) {
     }
     // Fallback: try to stringify whatever it is
     return String(content || '');
+}
+
+// ── Extract OpenClaw metadata JSON (best-effort) ───────────────────
+function parseOpenClawMetadata(rawText) {
+    if (!rawText || typeof rawText !== 'string') return null;
+    const text = rawText.trimStart();
+    // Form A: "Conversation info (untrusted metadata):\n```json\n{...}\n```\n\n..."
+    const a = text.match(/^Conversation info \(untrusted metadata\):\s*```(?:json)?\s*\n([\s\S]*?)\n```\s*/m);
+    if (a && a[1]) {
+        try { return JSON.parse(a[1]); } catch { return null; }
+    }
+    // Form B: "```json\n{...}\n```\n\n..."
+    const b = text.match(/^```(?:json)?\s*\n([\s\S]*?)\n```\s*/m);
+    if (b && b[1]) {
+        try { return JSON.parse(b[1]); } catch { return null; }
+    }
+    return null;
 }
 
 // ── Trigger words that include a brief vote summary ──────────────
@@ -111,6 +134,8 @@ app.get('/v1/models', (_req, res) => {
 
 const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions';
 const COUNCIL_URL = 'http://localhost:5001/v1/council';
+const TAVILY_URL = 'https://api.tavily.com/search';
+const TAVILY_API_KEY = process.env.TAVILY_API_KEY || '';
 
 // ── Layer 1: Safety keywords (instant, no API call) ──
 const SAFETY_KEYWORDS = [
@@ -124,6 +149,100 @@ const SAFETY_KEYWORDS = [
 function checkSafetyFilter(message) {
     const lower = message.toLowerCase();
     return SAFETY_KEYWORDS.some(kw => lower.includes(kw));
+}
+
+// ── Search-needed + finance heuristics ────────────────────────────
+function detectSearchNeeded(message) {
+    if (!message) return false;
+    const q = message.toLowerCase();
+    const triggers = [
+        'search the web', 'web search',
+        'latest', 'today', 'as of', 'right now', 'current',
+        'news', 'breaking',
+        'price', 'quote', 'rate',
+        'nifty', 'sensex', 'nse', 'bse',
+        'crypto', 'bitcoin', 'btc',
+        '2026', 'yesterday', 'last 24 hours', 'last week'
+    ];
+    return triggers.some(t => q.includes(t));
+}
+
+function isFinanceOrPredictionQuery(message) {
+    if (!message) return false;
+    const q = message.toLowerCase();
+    const triggers = [
+        'nifty', 'sensex', 'nse', 'bse',
+        'portfolio', 'shares', 'equity',
+        'invest', 'investment', 'should i',
+        'forecast', 'predict', 'projection',
+        'drawdown', 'monte carlo',
+        'btc', 'bitcoin', 'crypto'
+    ];
+    return triggers.some(t => q.includes(t));
+}
+
+function financeDisclaimerBlock() {
+    return (
+        "⚠️ **Finance & prediction disclaimer**: This is informational analysis based on public sources and assumptions, " +
+        "not financial advice. Markets are volatile; validate prices/news independently and consider your risk tolerance.\n\n"
+    );
+}
+
+// ── Tavily web search (for moderate fact-lookup path) ─────────────
+async function tavilySearch(query, { maxResults = 5, searchDepth = 'basic', topic = 'general', timeRange = null } = {}) {
+    if (!TAVILY_API_KEY) {
+        return { ok: false, error: 'TAVILY_API_KEY missing' };
+    }
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 20_000);
+    try {
+        const res = await fetch(TAVILY_URL, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${TAVILY_API_KEY}`
+            },
+            body: JSON.stringify({
+                query,
+                max_results: Math.max(0, Math.min(Number(maxResults) || 5, 10)),
+                search_depth: searchDepth,
+                topic,
+                ...(timeRange ? { time_range: timeRange } : {})
+            }),
+            signal: controller.signal
+        });
+        clearTimeout(timeout);
+        if (!res.ok) {
+            const text = await res.text().catch(() => '');
+            return { ok: false, error: `Tavily ${res.status}: ${text.substring(0, 300)}` };
+        }
+        return { ok: true, data: await res.json() };
+    } catch (e) {
+        clearTimeout(timeout);
+        return { ok: false, error: e.message || String(e) };
+    }
+}
+
+function buildTavilyEvidencePack(query, raw) {
+    const ts = new Date().toISOString();
+    const results = (raw && raw.results) ? raw.results : [];
+    let out = `WEB_SEARCH_EVIDENCE (Tavily)\n` +
+        `timestamp_utc: ${ts}\n` +
+        `query: ${query}\n\n`;
+    if (!results.length) {
+        out += 'No results found.\n';
+        return out;
+    }
+    results.slice(0, 8).forEach((r, i) => {
+        const title = (r.title || r.url || `Result ${i + 1}`).toString().trim();
+        const url = (r.url || '').toString().trim();
+        const snippet = (r.content || r.snippet || '').toString().trim();
+        out += `[${i + 1}] ${title}\nurl: ${url}\n`;
+        if (snippet) out += `snippet: ${snippet}\n`;
+        out += `\n`;
+    });
+    out += 'Instruction: Use ONLY the evidence above for freshness-dependent claims. When citing, include the matching URL.\n';
+    return out;
 }
 
 // ── Layer 2: Intent classifier (lightweight Gemini call) ──
@@ -176,7 +295,7 @@ Query: "${message.substring(0, 500)}"`
 }
 
 // ── Council caller ──
-async function callCouncil(query) {
+async function callCouncil(query, intent = null, conversationId = null, evidencePack = null, searchMeta = null) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 120_000);
 
@@ -184,7 +303,13 @@ async function callCouncil(query) {
         const res = await fetch(COUNCIL_URL, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ query }),
+            body: JSON.stringify({
+                query,
+                intent,
+                conversation_id: conversationId,
+                evidence_pack: evidencePack,
+                search: searchMeta
+            }),
             signal: controller.signal
         });
         clearTimeout(timeout);
@@ -274,15 +399,37 @@ function extractLastUserMessage(messages) {
     return null;
 }
 
+function extractLastUserMessageRaw(messages) {
+    if (!Array.isArray(messages)) return null;
+    for (let i = messages.length - 1; i >= 0; i--) {
+        const m = messages[i];
+        if (m.role === 'user') {
+            let text = '';
+            if (typeof m.content === 'string') text = m.content;
+            else if (Array.isArray(m.content)) {
+                text = m.content
+                    .filter(p => p.type === 'text' && p.text)
+                    .map(p => p.text)
+                    .join('\n');
+            } else {
+                text = String(m.content || '');
+            }
+            return text;
+        }
+    }
+    return null;
+}
+
 // ── Strip OpenClaw metadata injected at the top of user messages ──
 // OpenClaw prepends one of these forms:
 //   Form A: "Conversation info (untrusted metadata):\n```json\n{...}\n```\n\n<actual message>"
 //   Form B: "```json\n{...}\n```\n\n<actual message>"  (truncated, no header)
 function cleanUserMessage(text) {
     if (!text) return text;
-    return text
+    const t = String(text).trimStart();
+    return t
         // Form A: full header + JSON block
-        .replace(/^Conversation info \(untrusted metadata\):[\s\S]*?```\s*\n?/m, '')
+        .replace(/^Conversation info \(untrusted metadata\):\s*```(?:json)?\s*\n[\s\S]*?\n```\s*\n?/m, '')
         // Form B: bare ```json block at the very start (no header)
         .replace(/^```(?:json)?\s*\n[\s\S]*?\n```\s*\n?/m, '')
         // Safety: strip any lone ``` fence left at the top
@@ -322,6 +469,57 @@ function isToolLoop(messages) {
     return last.role === 'tool' || last.role === 'function';
 }
 
+// ── Strip web_search / brave_search artifacts from conversation history ──
+// OpenClaw's history may contain assistant messages with web_search tool_calls
+// and tool-role messages with Brave Search errors.  If Gemini sees those it
+// either retries web_search (which isn't in the stripped tools list) or echoes
+// the "Brave API key not configured" error text to the user.
+// This function removes those messages so Gemini starts with a clean slate;
+// live web data is injected separately via Tavily by this server's routing.
+function stripWebSearchHistory(messages) {
+    if (!Array.isArray(messages)) return messages;
+
+    // 1. Collect tool_call IDs that belong to web_search / brave_search
+    const webSearchCallIds = new Set();
+    for (const m of messages) {
+        if (m.role === 'assistant' && Array.isArray(m.tool_calls)) {
+            for (const tc of m.tool_calls) {
+                const name = (tc?.function?.name || tc?.name || '').toLowerCase();
+                if (name === 'web_search' || name === 'brave_search') {
+                    if (tc.id) webSearchCallIds.add(tc.id);
+                }
+            }
+        }
+    }
+
+    // 2. Walk & filter
+    const cleaned = [];
+    for (const m of messages) {
+        // Drop tool-role messages that are responses to a web_search call
+        if (m.role === 'tool' && m.tool_call_id && webSearchCallIds.has(m.tool_call_id)) {
+            continue;
+        }
+
+        // For assistant messages, strip web_search entries from tool_calls
+        if (m.role === 'assistant' && Array.isArray(m.tool_calls)) {
+            const kept = m.tool_calls.filter(tc => {
+                const name = (tc?.function?.name || tc?.name || '').toLowerCase();
+                return name !== 'web_search' && name !== 'brave_search';
+            });
+            if (kept.length === 0 && !m.content) {
+                // The entire message was just a web_search tool_call — skip it
+                continue;
+            }
+            // Preserve the message but without the web_search tool_calls
+            cleaned.push({ ...m, tool_calls: kept.length > 0 ? kept : undefined });
+            continue;
+        }
+
+        cleaned.push(m);
+    }
+    return cleaned;
+}
+
 // ── Strip unsupported params from OpenClaw request ──
 function cleanOpenClawBody(body) {
     const {
@@ -329,12 +527,43 @@ function cleanOpenClawBody(body) {
         stream, stream_options,
         store,
         max_completion_tokens,
+        tools: rawTools,
+        tool_choice,
         ...clean
     } = body;
     clean.stream = false;
     if (max_completion_tokens && !clean.max_tokens) {
         clean.max_tokens = max_completion_tokens;
     }
+
+    // Strip OpenClaw's native web_search tool so all searches route through
+    // this server's Tavily integration instead of Brave Search.
+    // Any other tools (e.g. file/execution tools) are preserved if present.
+    if (Array.isArray(rawTools)) {
+        const filtered = rawTools.filter(t => {
+            const name = (t?.function?.name || t?.name || '').toLowerCase();
+            return name !== 'web_search' && name !== 'brave_search';
+        });
+        if (filtered.length > 0) {
+            // Re-attach remaining tools + tool_choice so the execution pipeline still works
+            clean.tools = filtered;
+            if (tool_choice !== undefined) clean.tool_choice = tool_choice;
+        }
+        // If all tools were filtered out, omit tools/tool_choice entirely
+        // (Gemini returns an error on an empty tools array)
+    }
+
+    // Strip stale web_search / brave_search tool_calls & responses from history
+    // so Gemini never sees "Brave API key not configured" errors.
+    if (Array.isArray(clean.messages)) {
+        const before = clean.messages.length;
+        clean.messages = stripWebSearchHistory(clean.messages);
+        const after = clean.messages.length;
+        if (before !== after) {
+            console.log(`[cleanBody] 🧹 Stripped ${before - after} web_search history message(s)`);
+        }
+    }
+
     return clean;
 }
 
@@ -353,11 +582,30 @@ async function callGemini(cleanBody, apiKey) {
 }
 
 // ── Council route handler: runs council then feeds result to Gemini if execution needed ──
-async function routeThroughCouncil(res, cleanBody, apiKey, userMessage, safetyTriggered, intent) {
+async function routeThroughCouncil(res, cleanBody, apiKey, userMessage, safetyTriggered, intent, conversationId) {
     const councilLabel = safetyTriggered ? '🛡️ Safety Review' : '🏛️ Council';
     console.log(`[router] ${councilLabel} → calling council for: "${userMessage.substring(0, 80)}..."`);
 
-    const council = await callCouncil(userMessage);
+    const searchNeeded = detectSearchNeeded(userMessage);
+    let evidencePack = null;
+    let searchMeta = null;
+    if (searchNeeded) {
+        const search = await tavilySearch(userMessage, { maxResults: 5, searchDepth: 'basic', topic: 'general' });
+        evidencePack = search.ok ? buildTavilyEvidencePack(userMessage, search.data) : null;
+        const results = search.ok ? (search.data?.results || []) : [];
+        searchMeta = {
+            used: !!search.ok,
+            error: search.ok ? null : search.error,
+            results: results.slice(0, 5).map(r => ({
+                title: r.title || '',
+                url: r.url || '',
+                snippet: (r.content || r.snippet || '').toString().slice(0, 500)
+            }))
+        };
+        console.log(`[router] 🌐 search_needed=${searchNeeded} tavily_ok=${search.ok} results=${searchMeta.results.length}`);
+    }
+
+    const council = await callCouncil(userMessage, intent, conversationId, evidencePack, searchMeta);
 
     if (!council.success) {
         console.log(`[router] ⚠️ Council failed (${council.error}) → falling back to Gemini`);
@@ -381,11 +629,18 @@ async function routeThroughCouncil(res, cleanBody, apiKey, userMessage, safetyTr
         safety_triggered: safetyTriggered,
         intent,
         route: 'council',
+        conversation_id: conversationId,
         council_models: council.models_used,
         council_duration_s: council.duration_seconds,
         requires_execution: requiresExecution,
         type
     });
+
+    const councilSearchUsed = !!(council.search && council.search.used);
+    const transparencyPrefix = councilSearchUsed
+        ? `🌐 **Used web search (Tavily)**\n`
+        : '';
+    const maybeFinanceDisclaimer = isFinanceOrPredictionQuery(userMessage) ? financeDisclaimerBlock() : '';
 
     if (requiresExecution) {
         // ── Council → Gemini Execution Pipeline ──
@@ -397,7 +652,7 @@ async function routeThroughCouncil(res, cleanBody, apiKey, userMessage, safetyTr
 
         const councilContextMsg = {
             role: 'system',
-            content: `The ConsensusForge council of AI models has analyzed the user's request and produced the following response:\n\n---\n${council.response}\n---\n\nUse this council analysis as your basis. The user's original request requires tool execution (file creation, shell commands, web search, etc.). Perform those actions now using the available tools. Start your reply with this prefix:\n"${prefix}"\nThen perform the required tasks and confirm what was done.`
+            content: `The ConsensusForge council of AI models has analyzed the user's request and produced the following response:\n\n---\n${council.response}\n---\n\nUse this council analysis as your basis. The user's original request requires tool execution (file creation, shell commands, web search, etc.). Perform those actions now using the available tools.\n\nStart your reply with this prefix:\n"${transparencyPrefix}${maybeFinanceDisclaimer}${prefix}"\nThen perform the required tasks and confirm what was done.`
         };
 
         // Inject council context into the messages array before calling Gemini
@@ -425,7 +680,7 @@ async function routeThroughCouncil(res, cleanBody, apiKey, userMessage, safetyTr
             ? `🛡️ **Safety Review** (${council.models_used} models, ${council.duration_seconds}s)\n\n`
             : `🏛️ **Council Response** (${council.models_used} models, ${council.duration_seconds}s)\n\n`;
         console.log(`[router] ✅ Council text reply sent (${council.duration_seconds}s)`);
-        sendSSEText(res, header + council.response, cleanBody.model);
+        sendSSEText(res, transparencyPrefix + maybeFinanceDisclaimer + header + council.response, cleanBody.model);
     }
 }
 
@@ -433,9 +688,14 @@ async function routeThroughCouncil(res, cleanBody, apiKey, userMessage, safetyTr
 // MAIN PROXY ENDPOINT — 3-layer routing + council→Gemini execution
 // ═══════════════════════════════════════════════════════════════════
 app.post('/gemini/v1/chat/completions', async (req, res) => {
-    const apiKey = req.headers.authorization?.replace('Bearer ', '') || '';
+    const apiKey =
+        (req.headers.authorization?.replace('Bearer ', '') || '').trim() ||
+        GEMINI_API_KEY;
     const cleanBody = cleanOpenClawBody(req.body);
-    const userMessage = extractLastUserMessage(cleanBody.messages); // already cleaned of metadata
+    const rawUser = extractLastUserMessageRaw(cleanBody.messages);
+    const meta = parseOpenClawMetadata(rawUser);
+    const conversationId = meta?.sender ? `openclaw-${String(meta.sender)}` : null;
+    const userMessage = cleanUserMessage(rawUser); // already cleaned of metadata
     const toolLoop = isToolLoop(cleanBody.messages);
 
     // ── Bypass: tool loops, no user message, or very short messages ──
@@ -459,37 +719,142 @@ app.post('/gemini/v1/chat/completions', async (req, res) => {
     const isDangerous = checkSafetyFilter(userMessage);
     if (isDangerous) {
         console.log(`[router] 🛡️ SAFETY FILTER triggered`);
-        await routeThroughCouncil(res, cleanBody, apiKey, userMessage, true, 'dangerous');
+        await routeThroughCouncil(res, cleanBody, apiKey, userMessage, true, 'dangerous', conversationId);
         return;
     }
 
     // ── Layer 2: Intent Classification (~200ms) ──
     console.log(`[router] 🧠 Classifying intent...`);
     const startClassify = Date.now();
-    const intent = await classifyIntent(userMessage, apiKey);
+    const rawIntent = await classifyIntent(userMessage, apiKey);
     const classifyMs = Date.now() - startClassify;
-    console.log(`[router]   Intent: ${intent} (${classifyMs}ms)`);
 
-    // ── Layer 3: Route ──
-    if (intent === 'high_stakes' || intent === 'dangerous') {
-        await routeThroughCouncil(res, cleanBody, apiKey, userMessage, false, intent);
+    // Heuristic upgrade:
+    // - finance + analysis/decision/simulation language => high_stakes
+    // - pure price/news lookups should remain moderate and use Tavily-only path
+    let intent = rawIntent;
+    const lowerMsg = userMessage.toLowerCase();
+    const financeKeywords = [
+        'nifty 50',
+        'sensex',
+        'portfolio',
+        'reliance',
+        'tcs',
+        'infy',
+        'stock',
+        'stocks',
+        'shares',
+        'equity',
+        'btc',
+        'bitcoin',
+        'crypto',
+        'investment',
+        'invest',
+        'drawdown',
+        'monte carlo'
+    ];
+    const highStakesSignals = [
+        'analyze',
+        'simulate',
+        'monte carlo',
+        'drawdown',
+        'recovery',
+        'recommend',
+        'should i',
+        'decide',
+        'verify',
+        'projection',
+        'worst-case',
+        'worst case',
+        'scenario',
+        'risk',
+    ];
+    const looksLikeHighStakesFinance =
+        financeKeywords.some(kw => lowerMsg.includes(kw)) &&
+        highStakesSignals.some(kw => lowerMsg.includes(kw));
+
+    if ((rawIntent === 'simple' || rawIntent === 'moderate') && looksLikeHighStakesFinance) {
+        intent = 'high_stakes';
+        console.log(`[router]   Intent upgraded from ${rawIntent} → high_stakes based on finance+analysis signals`);
     } else {
-        console.log(`[router] ⚡ → Gemini (intent: ${intent})`);
-        logDecision({ query: userMessage.substring(0, 200), route: 'gemini', intent });
+        console.log(`[router]   Intent: ${rawIntent} (${classifyMs}ms)`);
+    }
+
+    // ── Layer 3: Route (matches your flow table) ──
+    // - simple: Gemini direct
+    // - moderate + needs current data: Tavily → Gemini summarizes + cites
+    // - high_stakes/dangerous: Council (Tavily handled inside council when needed) → Gemini executes if required
+
+    if (intent === 'high_stakes' || intent === 'dangerous') {
+        await routeThroughCouncil(res, cleanBody, apiKey, userMessage, false, intent, conversationId);
+        return;
+    }
+
+    if ((intent === 'simple' || intent === 'moderate') && detectSearchNeeded(userMessage)) {
+        console.log(`[router] 🌐 moderate+search_needed → Tavily → Gemini summarize`);
+        const search = await tavilySearch(userMessage, { maxResults: 5, searchDepth: 'basic', topic: 'general' });
+        logDecision({
+            query: userMessage.substring(0, 200),
+            route: 'tavily_gemini',
+            intent,
+            conversation_id: conversationId,
+            search_used: search.ok
+        });
+
+        const evidencePack = search.ok ? buildTavilyEvidencePack(userMessage, search.data) : '';
+        const transparencyPrefix = `🌐 **Used web search (Tavily)**\n\n`;
+        const maybeFinanceDisclaimer = isFinanceOrPredictionQuery(userMessage) ? financeDisclaimerBlock() : '';
+
+        const systemMsg = {
+            role: 'system',
+            content:
+                `${transparencyPrefix}${maybeFinanceDisclaimer}` +
+                (search.ok
+                    ? `Use the evidence pack below to answer. Cite URLs inline for any factual claims.\n\n${evidencePack}`
+                    : `Web search was requested/needed but failed: ${search.error}. Answer with what you know and clearly label assumptions; suggest retrying.\n`)
+        };
+
+        const augmentedBody = { ...cleanBody, messages: [...cleanBody.messages, systemMsg] };
         try {
-            const gemini = await callGemini(cleanBody, apiKey);
-            if (gemini.status >= 400) {
-                console.log(`[router]   Gemini error: ${gemini.status}`);
-                return res.status(gemini.status).set('Content-Type', 'application/json').send(gemini.text);
-            }
+            const gemini = await callGemini(augmentedBody, apiKey);
+            if (gemini.status >= 400) return res.status(gemini.status).set('Content-Type', 'application/json').send(gemini.text);
             sendSSEFromGeminiJson(res, gemini.json);
-            const content = gemini.json?.choices?.[0]?.message?.content || '';
-            console.log(`[router] ✅ Gemini replied (${content.substring(0, 60)}...)`);
         } catch (err) {
-            console.error(`[router] ❌ Gemini error: ${err.message}`);
             res.status(502).json({ error: { message: err.message } });
         }
+        return;
     }
+
+    // simple / default: Gemini direct
+    console.log(`[router] ⚡ → Gemini (intent: ${intent})`);
+    logDecision({ query: userMessage.substring(0, 200), route: 'gemini', intent, conversation_id: conversationId });
+    try {
+        const gemini = await callGemini(cleanBody, apiKey);
+        if (gemini.status >= 400) {
+            console.log(`[router]   Gemini error: ${gemini.status}`);
+            return res.status(gemini.status).set('Content-Type', 'application/json').send(gemini.text);
+        }
+        sendSSEFromGeminiJson(res, gemini.json);
+    } catch (err) {
+        console.error(`[router] ❌ Gemini error: ${err.message}`);
+        res.status(502).json({ error: { message: err.message } });
+    }
+});
+
+// ── Feedback endpoint (thumbs up/down) ────────────────────────────
+app.post('/v1/feedback', (req, res) => {
+    const { conversation_id, message_id, rating, notes } = req.body || {};
+    if (!conversation_id || !rating) {
+        return res.status(400).json({ success: false, error: 'conversation_id and rating are required' });
+    }
+    logDecision({
+        route: 'feedback',
+        conversation_id: String(conversation_id),
+        message_id: message_id ? String(message_id) : null,
+        rating: String(rating),
+        notes: notes ? String(notes).substring(0, 500) : null
+    });
+    res.json({ success: true });
 });
 
 app.get('/health', (_req, res) => {
@@ -500,6 +865,10 @@ app.get('/health', (_req, res) => {
 app.post('/v1/council', async (req, res) => {
     const startTime = Date.now();
     const rawQuery = req.body.query;
+    const intent = req.body.intent || null;
+    const conversationId = req.body.conversation_id || null;
+    let evidencePack = req.body.evidence_pack || null;
+    let searchMeta = req.body.search || null;
     const query = cleanUserMessage(rawQuery); // strip any metadata
 
     if (!query) {
@@ -509,9 +878,30 @@ app.post('/v1/council', async (req, res) => {
     console.log(`\n${'='.repeat(60)}`);
     console.log(`[${new Date().toISOString()}] 🏛️ COUNCIL SKILL REQUEST`);
     console.log(`  Query: "${query.substring(0, 120)}"`);
+    if (intent) console.log(`  Intent: "${String(intent)}"`);
+    if (conversationId) console.log(`  Conversation: "${String(conversationId)}"`);
 
     try {
-        const result = await runCouncil(query);
+        // Deterministic router-layer web search (only when freshness signals are present)
+        // If the caller already provided evidence_pack/search, respect it.
+        const searchNeeded = detectSearchNeeded(query);
+        if (!evidencePack && !searchMeta && searchNeeded) {
+            const search = await tavilySearch(query, { maxResults: 5, searchDepth: 'basic', topic: 'general' });
+            evidencePack = search.ok ? buildTavilyEvidencePack(query, search.data) : null;
+            const results = search.ok ? (search.data?.results || []) : [];
+            searchMeta = {
+                used: !!search.ok,
+                error: search.ok ? null : search.error,
+                results: results.slice(0, 5).map(r => ({
+                    title: r.title || '',
+                    url: r.url || '',
+                    snippet: (r.content || r.snippet || '').toString().slice(0, 500)
+                }))
+            };
+            console.log(`[router] 🌐 /v1/council search_needed=${searchNeeded} tavily_ok=${search.ok} results=${searchMeta.results.length}`);
+        }
+
+        const result = await runCouncil(query, conversationId, intent, evidencePack, searchMeta);
         const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
 
         if (!result.success) {
@@ -536,6 +926,8 @@ app.post('/v1/council', async (req, res) => {
         logDecision({
             query: query.substring(0, 200),
             route: 'council_skill',
+            intent: intent || 'n/a',
+            conversation_id: conversationId,
             council_models: modelsUsed,
             council_duration_s: parseFloat(elapsed),
             requires_execution: requiresExecution
@@ -547,6 +939,7 @@ app.post('/v1/council', async (req, res) => {
             models_used: modelsUsed,
             duration_seconds: parseFloat(elapsed),
             rankings: result.metadata?.aggregate_rankings || [],
+            search: result.metadata?.search || { used: false, results: [], error: null },
             structured: { type, confidence: 0.85, requires_execution: requiresExecution }
         });
     } catch (err) {

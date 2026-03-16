@@ -7,6 +7,8 @@
 
 const { spawn } = require('child_process');
 const path = require('path');
+const fs = require('fs');
+const os = require('os');
 
 /**
  * Execute the Python council with a user query
@@ -15,7 +17,7 @@ const path = require('path');
  * @param {string} conversationId - Optional conversation ID for tracking
  * @returns {Promise<Object>} - The council's response
  */
-async function runCouncil(query, conversationId = null) {
+async function runCouncil(query, conversationId = null, intent = null, evidencePack = null, searchMeta = null) {
     return new Promise((resolve, reject) => {
         const startTime = Date.now();
         // Path to the backend directory
@@ -29,6 +31,30 @@ async function runCouncil(query, conversationId = null) {
 
         if (conversationId) {
             pythonArgs.push('--conversation-id', conversationId);
+        }
+        if (intent) {
+            pythonArgs.push('--intent', intent);
+        }
+
+        // Evidence pack is passed via a temp file to avoid CLI quoting/length issues
+        let evidenceFile = null;
+        if (evidencePack) {
+            try {
+                evidenceFile = path.join(os.tmpdir(), `cf-evidence-${Date.now()}.txt`);
+                fs.writeFileSync(evidenceFile, String(evidencePack), 'utf8');
+                pythonArgs.push('--evidence-pack-file', evidenceFile);
+            } catch (e) {
+                console.log(`[call_council] ⚠️ failed to write evidence pack file: ${e.message}`);
+            }
+        }
+
+        // Optional: compact search meta can be passed too (JSON string)
+        if (searchMeta) {
+            try {
+                pythonArgs.push('--search-meta', JSON.stringify(searchMeta));
+            } catch {
+                // ignore
+            }
         }
 
         console.log(`[call_council] 🐍 Spawning Python process...`);
@@ -89,6 +115,11 @@ async function runCouncil(query, conversationId = null) {
                     stdout: stdout,
                     stderr: stderr
                 });
+            }
+
+            // Cleanup evidence temp file
+            if (evidenceFile) {
+                try { fs.unlinkSync(evidenceFile); } catch { /* ignore */ }
             }
         });
 

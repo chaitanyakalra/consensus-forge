@@ -10,6 +10,7 @@ import json
 import sys
 import argparse
 from typing import Optional
+from pathlib import Path
 
 from .council import run_full_council
 from .storage import (
@@ -21,7 +22,13 @@ from .storage import (
 )
 
 
-async def run_council_cli(query: str, conversation_id: Optional[str] = None) -> dict:
+async def run_council_cli(
+    query: str,
+    conversation_id: Optional[str] = None,
+    intent: Optional[str] = None,
+    evidence_pack: Optional[str] = None,
+    search_meta: Optional[dict] = None,
+) -> dict:
     """
     Run the council and return results as JSON.
     """
@@ -30,10 +37,17 @@ async def run_council_cli(query: str, conversation_id: Optional[str] = None) -> 
         start = time.time()
         print(f"[cli.py] 🚀 Starting council for query: \"{query[:80]}...\"", file=sys.stderr)
         print(f"[cli.py]   conversation_id: {conversation_id}", file=sys.stderr)
+        print(f"[cli.py]   intent: {intent}", file=sys.stderr)
+        print(f"[cli.py]   evidence_pack: {'yes' if evidence_pack else 'no'}", file=sys.stderr)
         
         # Run the full 3-stage council process
         print(f"[cli.py] ⏳ Calling run_full_council()...", file=sys.stderr)
-        stage1, stage2, stage3, metadata = await run_full_council(query)
+        stage1, stage2, stage3, metadata = await run_full_council(
+            query,
+            intent=intent,
+            evidence_pack=evidence_pack,
+            search_meta=search_meta,
+        )
         elapsed = time.time() - start
         print(f"[cli.py] ✅ Council completed in {elapsed:.1f}s", file=sys.stderr)
         print(f"[cli.py]   stage1 models: {len(stage1)}", file=sys.stderr)
@@ -45,6 +59,7 @@ async def run_council_cli(query: str, conversation_id: Optional[str] = None) -> 
             "success": True,
             "query": query,
             "conversation_id": conversation_id,
+            "intent": intent,
             "stage1": [
                 {"model": r["model"], "response": r["response"]}
                 for r in stage1
@@ -73,7 +88,7 @@ async def run_council_cli(query: str, conversation_id: Optional[str] = None) -> 
                 add_user_message(conversation_id, query)
                 
                 # Add assistant message with all stages
-                add_assistant_message(conversation_id, stage1, stage2, stage3)
+                add_assistant_message(conversation_id, stage1, stage2, stage3, metadata)
                 
             except Exception as e:
                 # Don't fail the whole operation if saving fails
@@ -107,6 +122,21 @@ def main():
         type=str,
         help="Optional conversation ID for tracking"
     )
+    parser.add_argument(
+        "--intent",
+        type=str,
+        help="Optional intent label (simple/moderate/high_stakes/dangerous) for evolution",
+    )
+    parser.add_argument(
+        "--evidence-pack-file",
+        type=str,
+        help="Optional path to a text file containing router-provided web search evidence pack",
+    )
+    parser.add_argument(
+        "--search-meta",
+        type=str,
+        help="Optional JSON string with router-provided search metadata",
+    )
     
     args = parser.parse_args()
     
@@ -126,7 +156,21 @@ def main():
     print(f"[cli.py] 🌐 API URL: {OPENROUTER_API_URL}", file=sys.stderr)
     
     # Run the async council function
-    result = asyncio.run(run_council_cli(args.query, args.conversation_id))
+    evidence_pack = None
+    if args.evidence_pack_file:
+        try:
+            evidence_pack = Path(args.evidence_pack_file).read_text(encoding="utf-8")
+        except Exception as e:
+            print(f"[cli.py] ⚠️ failed to read evidence pack file: {e}", file=sys.stderr)
+
+    search_meta = None
+    if args.search_meta:
+        try:
+            search_meta = json.loads(args.search_meta)
+        except Exception as e:
+            print(f"[cli.py] ⚠️ failed to parse search_meta JSON: {e}", file=sys.stderr)
+
+    result = asyncio.run(run_council_cli(args.query, args.conversation_id, args.intent, evidence_pack, search_meta))
     
     # Output JSON to stdout (this is what Node.js will parse)
     json_output = json.dumps(result, indent=2)

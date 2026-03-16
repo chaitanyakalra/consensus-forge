@@ -1,16 +1,67 @@
 """3-stage LLM Council orchestration."""
 
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 import sys
 import asyncio
+import time
+import json
+from pathlib import Path
 from .openrouter import query_models_parallel, query_model
-from .config import COUNCIL_MODELS, CHAIRMAN_MODEL
+from .config import COUNCIL_MODELS, CHAIRMAN_MODEL, TAVILY_API_KEY
+from .websearch import (
+    detect_search_needed,
+    tavily_search,
+    extract_compact_results,
+    build_evidence_pack,
+)
 
 # Per-chairman-attempt timeout — prevents one slow model from blocking 6+ minutes
 CHAIRMAN_TIMEOUT = 30.0
 
+MODEL_POLICY_PATH = Path("data/model_policy.json")
 
-async def stage1_collect_responses(user_query: str) -> List[Dict[str, Any]]:
+
+def _load_model_policy() -> Optional[Dict[str, Any]]:
+    try:
+        if MODEL_POLICY_PATH.exists():
+            return json.loads(MODEL_POLICY_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    return None
+
+
+def select_council_models(intent: Optional[str]) -> List[str]:
+    """
+    Pick and order council models based on learned policy (best-effort).
+    Falls back to static COUNCIL_MODELS.
+    """
+    if not intent:
+        return COUNCIL_MODELS
+    policy = _load_model_policy()
+    if not policy:
+        return COUNCIL_MODELS
+    order = (
+        (policy.get("intents") or {}).get(intent, {}).get("order")
+        or (policy.get("default") or {}).get("order")
+    )
+    if not isinstance(order, list) or not order:
+        return COUNCIL_MODELS
+    # Safety: keep only configured models; preserve policy order
+    configured = set(COUNCIL_MODELS)
+    filtered = [m for m in order if m in configured]
+    # Ensure no configured model is dropped accidentally
+    for m in COUNCIL_MODELS:
+        if m not in filtered:
+            filtered.append(m)
+    return filtered
+
+
+async def stage1_collect_responses(
+    user_query: str,
+    *,
+    evidence_pack: Optional[str] = None,
+    council_models: Optional[List[str]] = None,
+) -> List[Dict[str, Any]]:
     """
     Stage 1: Collect individual responses from all council models.
 
@@ -20,10 +71,23 @@ async def stage1_collect_responses(user_query: str) -> List[Dict[str, Any]]:
     Returns:
         List of dicts with 'model' and 'response' keys
     """
-    messages = [{"role": "user", "content": user_query}]
+    messages: List[Dict[str, str]] = []
+    if evidence_pack:
+        messages.append(
+            {
+                "role": "system",
+                "content": (
+                    "You have access to web-search evidence for this question.\n\n"
+                    f"{evidence_pack}\n\n"
+                    "If the answer depends on up-to-date facts, ground it in the evidence and cite URLs."
+                ),
+            }
+        )
+    messages.append({"role": "user", "content": user_query})
 
     # Query all models in parallel
-    responses = await query_models_parallel(COUNCIL_MODELS, messages)
+    models = council_models or COUNCIL_MODELS
+    responses = await query_models_parallel(models, messages)
 
     # Format results
     stage1_results = []
@@ -39,7 +103,9 @@ async def stage1_collect_responses(user_query: str) -> List[Dict[str, Any]]:
 
 async def stage2_collect_rankings(
     user_query: str,
-    stage1_results: List[Dict[str, Any]]
+    stage1_results: List[Dict[str, Any]],
+    *,
+    council_models: Optional[List[str]] = None,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
     """
     Stage 2: Each model ranks the anonymized responses.
@@ -100,7 +166,8 @@ Now provide your evaluation and ranking:"""
     messages = [{"role": "user", "content": ranking_prompt}]
 
     # Get rankings from all council models in parallel
-    responses = await query_models_parallel(COUNCIL_MODELS, messages)
+    models = council_models or COUNCIL_MODELS
+    responses = await query_models_parallel(models, messages)
 
     # Format results
     stage2_results = []
@@ -147,7 +214,9 @@ def _is_meta_commentary(text: str) -> bool:
 async def stage3_synthesize_final(
     user_query: str,
     stage1_results: List[Dict[str, Any]],
-    stage2_results: List[Dict[str, Any]]
+    stage2_results: List[Dict[str, Any]],
+    *,
+    evidence_pack: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Stage 3: Chairman synthesizes final response.
@@ -189,10 +258,19 @@ async def stage3_synthesize_final(
             print(f"  [TIMEOUT] Chairman {model_name} timed out after {CHAIRMAN_TIMEOUT}s", file=sys.stderr)
             return None
 
+    evidence_block = ""
+    if evidence_pack:
+        evidence_block = f"""
+
+WEB SEARCH EVIDENCE (use for any freshness-dependent claims; cite URLs):
+{evidence_pack}
+"""
+
     chairman_prompt = f"""Below are several draft replies that were written for the user's question. Read them, pick the strongest ideas, and write your own final reply.
 
 USER'S QUESTION:
 {user_query}
+{evidence_block}
 
 DRAFTS (for reference only — do not mention these):
 {stage1_text}
@@ -382,7 +460,13 @@ Title:"""
     return title
 
 
-async def run_full_council(user_query: str) -> Tuple[List, List, Dict, Dict]:
+async def run_full_council(
+    user_query: str,
+    *,
+    intent: Optional[str] = None,
+    evidence_pack: Optional[str] = None,
+    search_meta: Optional[Dict[str, Any]] = None,
+) -> Tuple[List, List, Dict, Dict]:
     """
     Run the complete 3-stage council process.
 
@@ -392,8 +476,23 @@ async def run_full_council(user_query: str) -> Tuple[List, List, Dict, Dict]:
     Returns:
         Tuple of (stage1_results, stage2_results, stage3_result, metadata)
     """
-    # Stage 1: Collect individual responses
-    stage1_results = await stage1_collect_responses(user_query)
+    t0 = time.perf_counter()
+
+    # Web search is handled by the router deterministically. The council only consumes evidence_pack.
+    # If search_meta is provided, surface it in metadata for transparency/debugging.
+    search_used = bool(search_meta.get("used")) if isinstance(search_meta, dict) else False
+    search_error = search_meta.get("error") if isinstance(search_meta, dict) else None
+    search_results = search_meta.get("results") if isinstance(search_meta, dict) else []
+    if not isinstance(search_results, list):
+        search_results = []
+
+    # Select models (potentially evolved by intent)
+    council_models = select_council_models(intent)
+
+    # Stage 1: Collect individual responses (with evidence if available)
+    stage1_results = await stage1_collect_responses(
+        user_query, evidence_pack=evidence_pack, council_models=council_models
+    )
 
     # If no models responded successfully, return error
     if not stage1_results:
@@ -403,7 +502,9 @@ async def run_full_council(user_query: str) -> Tuple[List, List, Dict, Dict]:
         }, {}
 
     # Stage 2: Collect rankings
-    stage2_results, label_to_model = await stage2_collect_rankings(user_query, stage1_results)
+    stage2_results, label_to_model = await stage2_collect_rankings(
+        user_query, stage1_results, council_models=council_models
+    )
 
     # Calculate aggregate rankings
     aggregate_rankings = calculate_aggregate_rankings(stage2_results, label_to_model)
@@ -412,13 +513,22 @@ async def run_full_council(user_query: str) -> Tuple[List, List, Dict, Dict]:
     stage3_result = await stage3_synthesize_final(
         user_query,
         stage1_results,
-        stage2_results
+        stage2_results,
+        evidence_pack=evidence_pack,
     )
 
     # Prepare metadata
+    elapsed_s = time.perf_counter() - t0
     metadata = {
         "label_to_model": label_to_model,
-        "aggregate_rankings": aggregate_rankings
+        "aggregate_rankings": aggregate_rankings,
+        "search": {
+            "used": search_used,
+            "results": search_results,
+            "error": search_error,
+        },
+        "duration_seconds": round(elapsed_s, 2),
+        "intent": intent,
     }
 
     return stage1_results, stage2_results, stage3_result, metadata

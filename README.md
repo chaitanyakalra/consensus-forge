@@ -182,6 +182,7 @@ Create a `.env` file in the project root:
 
 ```bash
 OPENROUTER_API_KEY=sk-or-v1-your-key-here
+TAVILY_API_KEY=tvly-your-key-here   # optional: enables web search grounding
 ```
 
 > 💡 Sign up at [openrouter.ai](https://openrouter.ai/) — free-tier models are available. No credit card required for the default council configuration.
@@ -460,6 +461,8 @@ pm2 save
 - [x] Telegram channel support
 - [x] CLI interface for scripting
 - [x] Conversation persistence (JSON storage)
+- [x] 🌐 Web search grounding (Tavily)
+- [x] 🧬 Evolution policy (learn model ordering by intent)
 - [ ] 👍 User feedback loop (thumbs up/down in Telegram)
 - [ ] 🧮 Advanced synthesis (LLM ranker + weighted voting)
 - [ ] 🔀 Auto-switch council based on task type
@@ -486,7 +489,22 @@ Contributions are welcome! ConsensusForge is an open-source project and we'd lov
 - Improve the chairman synthesis prompt
 - Add unit tests for the ranking parser
 - Create Docker Compose configuration
-- Build the evolution module (`evolve.py`)
+- Add a feedback signal (thumbs up/down) to improve evolution
+
+---
+
+## 🧬 Evolution (learn from history)
+
+ConsensusForge can learn which council models perform best **per intent** (e.g., `high_stakes` vs `moderate`) by reading stored conversations and writing a policy file used at runtime.
+
+- **Run evolution job**:
+
+```bash
+uv run python -m backend.evolve
+```
+
+- **Output**: `data/model_policy.json`
+- **Runtime behavior**: when `intent` is provided (from `council_provider` routing or CLI `--intent`), the council will reorder models according to the learned policy; otherwise it falls back to `backend/config.py`'s `COUNCIL_MODELS`.
 
 ---
 
